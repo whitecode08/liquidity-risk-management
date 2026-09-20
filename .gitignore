@@ -1,0 +1,74 @@
+# ── Python ────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.so
+
+# ── Virtual environments ──────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+
+# ── Secrets / credentials ─────────────────────────────────
+# Any .env variant, anywhere in the repo (API keys: OPENMODEL_API_KEY, GEMINI_API_KEY, ...)
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+secrets.json
+secrets.toml
+credentials.json
+.streamlit/secrets.toml
+
+# ── Bank data — never committed ─────────────────────────────
+# Source files contain real customer account data (balances, deposits,
+# financing records). The app takes these via upload; the folder is not
+# needed to run it, only to develop/test against a local sample.
+database/
+# OJK regulatory templates — sourced from the regulator, uploaded at
+# runtime via the sidebar (not read from disk by the app). Re-download
+# rather than commit.
+template/
+# Regulatory reference PDF(s) — large binary, not needed to run the app.
+docs/
+# Generated reports (may contain real figures derived from bank data)
+output/*
+!output/.gitkeep
+# Excel lock/temp files left behind by an open workbook
+~$*.xlsx
+~$*.xlsm
+
+# ── Jupyter / IPython ────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+# ── OS / Editor ───────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*.swo
+.idea/
+.vscode/settings.json
+*.code-workspace
+
+# ── Logs ──────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Claude Code local session state ─────────────────────────
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# ── Scratch / ad-hoc debug scripts ──────────────────────────
+scratch/
