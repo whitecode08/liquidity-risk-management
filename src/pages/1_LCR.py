@@ -54,12 +54,12 @@ with st.sidebar:
     st.markdown("## 📂 Source Files")
     st.markdown(
         "<small style='color:#94A3B8;font-weight:500;'>Required: "
-        "<code>nrc01</code>, <code>pbi01</code>, <code>sym01</code>, "
-        "<code>tab01</code>, <code>gir01</code>, <code>dep01</code>, <code>krp01</code></small>",
+        "<code>NeracaHarian</code>, <code>PenempatanBI</code>, <code>SBI</code>, "
+        "<code>Tabungan</code>, <code>Giro</code>, <code>Deposito</code>, <code>Pinjaman</code></small>",
         unsafe_allow_html=True,
     )
     files = st.file_uploader(
-        "Upload HasilGenerateAllCabang_*.xlsx files",
+        "Upload source .xlsx files (NeracaHarian, PenempatanBI, SBI, Tabungan, Giro, Deposito, Pinjaman)",
         type=["xlsx"], accept_multiple_files=True, label_visibility="collapsed", key="lcr_files",
     )
 
@@ -74,18 +74,18 @@ with st.sidebar:
 
 # ── File Detection ────────────────────────────────────────────────────────────
 get = lambda kw: next((f for f in (files or []) if kw.lower() in f.name.lower()), None)
-file_nrc01 = get("nrc01"); file_pbi01 = get("pbi01"); file_sym01 = get("sym01")
-file_tab01 = get("tab01"); file_gir01 = get("gir01"); file_dep01 = get("dep01")
-file_krp01 = get("krp01")
+file_nrc01 = get("neracaharian"); file_pbi01 = get("penempatanbi"); file_sym01 = get("sbi")
+file_tab01 = get("tabungan"); file_gir01 = get("giro"); file_dep01 = get("deposito")
+file_krp01 = get("pinjaman")
 
 required_map = {
-    "nrc01": (file_nrc01, "nrc01 — Balance Sheet / RKA"),
-    "pbi01": (file_pbi01, "pbi01 — BI Placement"),
-    "sym01": (file_sym01, "sym01 — SUKBI"),
-    "tab01": (file_tab01, "tab01 — Tabungan"),
-    "gir01": (file_gir01, "gir01 — Giro"),
-    "dep01": (file_dep01, "dep01 — Deposito"),
-    "krp01": (file_krp01, "krp01 — Financing"),
+    "NeracaHarian": (file_nrc01, "NeracaHarian — Neraca Harian / RKA"),
+    "PenempatanBI": (file_pbi01, "PenempatanBI — Penempatan di Bank Indonesia"),
+    "SBI":          (file_sym01, "SBI — Sertifikat Bank Indonesia"),
+    "Tabungan":     (file_tab01, "Tabungan"),
+    "Giro":         (file_gir01, "Giro"),
+    "Deposito":     (file_dep01, "Deposito"),
+    "Pinjaman":     (file_krp01, "Pinjaman — Kredit"),
 }
 ok_all = all(f is not None for f, _ in required_map.values())
 
@@ -344,7 +344,7 @@ with tab3:
 with tab4:
     st.caption("Inspect raw data columns to debug source-file mismatches.")
     dfs = R["dfs"]
-    d1, d2 = st.tabs(["📄 nrc01 Sheets", "👥 DPK / Financing"])
+    d1, d2 = st.tabs(["📄 NeracaHarian Sheets", "👥 DPK / Financing"])
     with d1:
         st.write("**ASET**");      st.dataframe(dfs["nrc_aset"].head(50),      use_container_width=True)
         st.write("**RANGKUMAN**"); st.dataframe(dfs["nrc_rangkuman"].head(50), use_container_width=True)

@@ -148,7 +148,7 @@ def record_error(module: str, message: str) -> None:
 LCR_HQLA_SPEC = [
     ("HQLA", "Cash & cash equivalents", "Cash & Cash Equivalents", 1.00,
      "Level 1 asset — no haircut"),
-    ("HQLA", "Placement at Bank Indonesia (SUKBI + Giro BI net of GWM + FASBIS)",
+    ("HQLA", "Placement at Bank Indonesia (SBI + Giro BI net of GWM + FASBIS)",
      "Placement at Central Bank", 1.00, "Level 1 asset — no haircut"),
 ]
 
@@ -210,7 +210,7 @@ NSFR_ASF_SPEC = [
 NSFR_RSF_SPEC = [
     ("RSF — HQLA", "Cash (KAS)", "kas", 0.00),
     ("RSF — HQLA", "BI placement (FASBIS + Giro BI)", "fasbis", 0.00),
-    ("RSF — HQLA", "SUKBI (unencumbered)", "sukbi", 0.00),
+    ("RSF — HQLA", "SBI (unencumbered)", "sukbi", 0.00),
     ("RSF — Interbank", "Placement at other banks", "interbank", 0.15),
     ("RSF — Financing", "Performing financing <6m", "perf_A", 0.50),
     ("RSF — Financing", "Performing financing 6m–1yr", "perf_B", 0.50),

@@ -1,6 +1,21 @@
 # 💧 Liquidity Risk Management System
 
-A Streamlit-based regulatory compliance tool for calculating the **Liquidity Coverage Ratio (LCR)** and **Net Stable Funding Ratio (NSFR)** in accordance with **POJK No. 20 Tahun 2025** — _Kewajiban Pemenuhan Rasio Kecukupan Likuiditas dan Rasio Pendanaan Stabil Bersih bagi Bank BUS & UUS_.
+A Streamlit-based regulatory compliance tool covering:
+
+- **LCR** (Liquidity Coverage Ratio) and **NSFR** (Net Stable Funding Ratio) per
+  **POJK No. 20 Tahun 2025** — _Kewajiban Pemenuhan Rasio Kecukupan Likuiditas dan Rasio
+  Pendanaan Stabil Bersih bagi Bank BUS & UUS_.
+- **ILAAP** (Internal Liquidity Adequacy Assessment Process) — Available HQLA and Survival
+  Period Monitoring per **SEOJK No. 26/SEOJK.03/2025**.
+- **AI Executive Summary** — board-ready narrative commentary on the above, generated via an
+  LLM gateway.
+
+> **Naming note:** the calculation engines (`lcr_engine.py`, `nsfr_engine.py`) implement the
+> BUS/UUS (Islamic bank) factor tables from POJK No. 20/2025 and are not modified for this. The
+> demo data, file names and UI labels, however, use conventional-bank terminology (Tabungan,
+> Giro, Deposito, Pinjaman, SBI) — see [`docs/SPEK_MODUL_ILAAP.md`](docs/SPEK_MODUL_ILAAP.md) for
+> the reasoning. Internal Python variable/column names (e.g. `sukbi`, `kualitas`) still follow the
+> original Sharia nomenclature and are unaffected by the display-layer renaming.
 
 ---
 
@@ -9,21 +24,37 @@ A Streamlit-based regulatory compliance tool for calculating the **Liquidity Cov
 ```
 liquidity-risk-management/
 ├── src/
-│   ├── app.py                  # ← Main entry point (Home page)
-│   ├── lcr_engine.py           # ← LCR business logic (pure Python, no UI)
-│   ├── nsfr_engine.py          # ← NSFR business logic (pure Python, no UI)
-│   ├── ai_summary.py           # ← AI Executive Summary (OpenModel / DeepSeek)
-│   ├── audit_log.py            # ← Audit trail & calculation derivation tables
+│   ├── app.py                    # ← Main entry point (Home page)
+│   ├── lcr_engine.py             # ← LCR business logic (pure Python, no UI)
+│   ├── nsfr_engine.py            # ← NSFR business logic (pure Python, no UI)
+│   ├── ai_summary.py             # ← AI Executive Summary (OpenModel gateway)
+│   ├── audit_log.py              # ← Audit trail & calculation derivation tables
+│   ├── ilaap/                    # ← ILAAP module (SEOJK No. 26/2025)
+│   │   ├── available_hqla.py     #    Modul 1 — Available HQLA
+│   │   ├── survival_period.py    #    Modul 2 — Survival Period Monitoring (19-bucket ladder)
+│   │   ├── data_contract.py      #    Normalizes source sheets into a transaction ledger
+│   │   ├── audit.py              #    ILAAP audit trail + independent reconciliation
+│   │   └── config/
+│   │       ├── time_buckets.yaml       # 19 time buckets
+│   │       └── stress_scenarios.yaml   # lcr_30_hari + benchmark_90_hari_* scenarios
 │   ├── pages/
-│   │   ├── 0_Home.py           # ← Home page
-│   │   ├── 1_LCR.py            # ← LCR Calculator page
-│   │   ├── 2_NSFR.py           # ← NSFR Calculator page
-│   │   ├── 3_AI_Summary.py     # ← AI Executive Summary page
-│   │   ├── 4_Stress_Testing.py # ← ILAAP stress testing / survival horizon
-│   │   └── 5_Audit_Log.py      # ← Calculation audit trail for internal audit
+│   │   ├── 0_Home.py             # ← Home page
+│   │   ├── 1_LCR.py              # ← LCR Calculator page
+│   │   ├── 2_NSFR.py             # ← NSFR Calculator page
+│   │   ├── 3_AI_Summary.py       # ← AI Executive Summary page (LCR + NSFR + ILAAP)
+│   │   ├── 4_Stress_Testing.py   # ← ILAAP Survival Period Monitoring (full regulatory calc)
+│   │   └── 5_Audit_Log.py        # ← Calculation audit trail for internal audit
 │   └── assets/
-│       └── style.css           # ← Custom banking UI stylesheet
-├── .env.example                # ← Template .env
+│       └── style.css             # ← Custom banking UI stylesheet
+├── scripts/
+│   └── generate_dummy_data.py    # ← Synthetic conventional-bank dummy data generator
+├── tests/
+│   └── test_ilaap.py             # ← Unit tests for the ILAAP module (unittest, no pytest dep)
+├── database/
+│   └── dummy/                    # ← Generated dummy data (synthetic, safe to commit)
+├── docs/
+│   └── SPEK_MODUL_ILAAP.md       # ← ILAAP implementation spec this module is built from
+├── .env.example                  # ← Template .env
 ├── README.md
 └── .gitignore
 ```
@@ -32,31 +63,69 @@ liquidity-risk-management/
 
 ## Data & Secrets — Not in This Repository
 
-`database/`, `template/`, `docs/` and `.env` are **git-ignored**. This is a compliance tool that
-handles real customer account balances and deposit records — none of that belongs in version
-control, ever, even in a private repo.
+`database/*.xlsx` (except the dummy set), `template/`, `docs/*` (except `.md` notes) and `.env`
+are **git-ignored**. This is a compliance tool that handles real customer account balances and
+deposit records — none of that belongs in version control, ever, even in a private repo.
 
-| Folder / file     | Why it's ignored                             | What replaces it                                      |
-| ----------------- | -------------------------------------------- | ----------------------------------------------------- |
-| `database/*.xlsx` | Real customer account & financing data       | Upload via the sidebar file uploader each session     |
-| `template/*.xlsx` | OJK reporting templates (large binaries)     | Upload via the sidebar; not read from disk by the app |
-| `docs/*.pdf`      | Regulatory reference PDF (large binary)      | Re-download from OJK if needed for reference          |
-| `output/*.xlsx`   | Generated reports — may contain real figures | Regenerated on demand; `.gitkeep` keeps the folder    |
-| `.env`            | Real `OPENMODEL_API_KEY`                     | Copy `.env.example` → `.env` and fill in your own key |
+| Folder / file            | Why it's ignored                             | What replaces it                                       |
+| ------------------------- | -------------------------------------------- | ------------------------------------------------------- |
+| `database/*.xlsx`         | Real customer account & financing data       | Upload via the sidebar file uploader each session, or use `database/dummy/` |
+| `database/dummy/*.xlsx`   | **Not ignored** — 100% synthetic, no real data | Generated by `scripts/generate_dummy_data.py`          |
+| `template/*.xlsx`         | OJK reporting templates (large binaries)     | Upload via the sidebar; not read from disk by the app    |
+| `docs/*.pdf`              | Regulatory reference PDF (large binary)      | Re-download from OJK if needed for reference             |
+| `docs/*.md`               | **Not ignored** — implementation notes       | e.g. `docs/SPEK_MODUL_ILAAP.md`                          |
+| `output/*.xlsx`           | Generated reports — may contain real figures | Regenerated on demand; `.gitkeep` keeps the folder        |
+| `.env`                    | Real `OPENMODEL_API_KEY`                     | Copy `.env.example` → `.env` and fill in your own key     |
 
-Cloning this repo gives you working code with **no data and no secrets**. Nothing in `src/`
-reads from `database/`, `template/` or `docs/` at import time — every one of them is optional
-and only used if you choose to keep local copies for development.
+Cloning this repo gives you working code **plus a synthetic demo dataset** — no real data, no
+secrets. Nothing in `src/` reads from `database/`, `template/` or `docs/` at import time; every
+one of them is optional at runtime.
+
+---
+
+## Quick Start with Dummy Data
+
+The fastest way to try every feature end-to-end without real bank data:
+
+```bash
+python scripts/generate_dummy_data.py   # writes 18 files to database/dummy/
+streamlit run src/app.py
+```
+
+This generates two reporting dates (**2025-08-31** and **2025-09-30**) so you can compare
+month-over-month, for a synthetic mid-size conventional bank:
+
+| File                       | Contents                                                          |
+| --------------------------- | ------------------------------------------------------------------ |
+| `NeracaHarian_<date>.xlsx`  | Daily balance sheet — sheets **ASET**, **LIABILITAS**, **LABA RUGI**, **RKA**, **RANGKUMAN** |
+| `PenempatanBI_<date>.xlsx`  | BI Placement (FASBIS, Giro BI)                                     |
+| `SBI_<date>.xlsx`           | Sertifikat Bank Indonesia holdings                                  |
+| `Tabungan_<date>.xlsx`      | Savings accounts (granular, per-account)                           |
+| `Giro_<date>.xlsx`          | Current accounts (granular, per-account)                           |
+| `Deposito_<date>.xlsx`      | Time deposits, with maturity dates                                  |
+| `Pinjaman_<date>.xlsx`      | Loans / financing, with maturity + quality classification           |
+| `Agunan_<date>.xlsx`        | Collateral detail — **not used by any engine** (see note below)     |
+| `KewajibanGWMPLM_<date>.xlsx` | GWM/PLM/BI-sourced-liquidity figures for ILAAP Modul 1              |
+
+Upload the seven core files (all but `Agunan`) into the LCR or NSFR page's sidebar uploader —
+file names are matched by keyword, so exact prefixes don't matter. Ratios come out realistic
+(LCR ~200-255%, NSFR ~150-165% on the bundled dates) — well above the 100% regulatory minimum,
+by design, to demonstrate a healthy-bank scenario.
+
+`Agunan` (collateral detail) is generated for completeness but deliberately not fed into any
+calculation: it is collateral pledged *to* the bank against loans (asset-side, already
+summarized in `Pinjaman`'s `nilaiAgunanYangDapatDiperhitungkanKredit` column) — not LCR's
+liability-side "Secured Funding," which this dataset doesn't model.
 
 ---
 
 ## Requirements
 
 - Python 3.10+
-- `streamlit`, `pandas`, `numpy`, `openpyxl`, `altair`, `python-dotenv`, `anthropic`
+- `streamlit`, `pandas`, `numpy`, `openpyxl`, `altair`, `python-dotenv`, `anthropic`, `PyYAML`
 
 ```bash
-pip install streamlit pandas numpy openpyxl altair python-dotenv anthropic
+pip install streamlit pandas numpy openpyxl altair python-dotenv anthropic PyYAML
 ```
 
 ### AI Executive Summary configuration
@@ -85,6 +154,10 @@ The AI Summary page reads the live model catalogue into a sidebar picker, so the
 switched (DeepSeek, Claude, GLM, …) without editing `.env`. Without a valid key the page shows
 setup instructions instead of failing silently.
 
+If a chosen model returns an empty response — typically a reasoning model that spends its whole
+token budget "thinking" before writing — the app automatically retries once with double the
+token budget before surfacing an error, so switching models rarely needs a manual retry.
+
 ---
 
 ## Running the Application
@@ -100,104 +173,187 @@ The app opens at `http://localhost:8501`. Use the sidebar navigation to switch b
 - 🏠 **Home** — Overview & file reference
 - 💧 **LCR** — Liquidity Coverage Ratio calculator
 - 🏦 **NSFR** — Net Stable Funding Ratio calculator
-- 🤖 **AI Executive Summary** — Board-level summary of LCR/NSFR results
-- 🌩️ **ILAAP Stress Testing** — Survival horizon under stress scenarios
+- 🤖 **AI Executive Summary** — Board-level narrative covering LCR, NSFR and ILAAP results
+- 🌩️ **Stress Testing (ILAAP)** — Available HQLA + Survival Period Monitoring per SEOJK 26/2025
 - 📒 **Audit Log** — Calculation trace and audit pack export
+
+**Run order matters:** Stress Testing (ILAAP) and AI Executive Summary both reuse the source
+data and results already loaded on the LCR (and NSFR) pages via `st.session_state` — run LCR
+first. No file is uploaded twice.
 
 ---
 
 ## Source Files
 
-All source files follow the naming pattern:
-`HasilGenerateAllCabang_<code>_<YYYY-MM-DD>.xlsx`
+Files are matched by **keyword in the filename** (case-insensitive substring match), not an
+exact pattern — `Tabungan_2025-09-30.xlsx`, `tabungan.xlsx` and `TABUNGAN (1).xlsx` all match.
 
-| File Code | Description                                                         | Used In   |
-| --------- | ------------------------------------------------------------------- | --------- |
-| `nrc01`   | Daily Balance Sheet — sheets: **ASET**, **RANGKUMAN**, **RKA**      | LCR, NSFR |
-| `pbi01`   | BI Placement (FASBIS F08, Giro BI F09)                              | LCR, NSFR |
-| `sym01`   | SUKBI instrument data (`SedangDiagunkan`, `nominal`)                | LCR, NSFR |
-| `tab01`   | Tabungan (savings accounts)                                         | LCR, NSFR |
-| `gir01`   | Giro (current accounts)                                             | LCR, NSFR |
-| `dep01`   | Deposito (time deposits, with `tanggalJatuhTempo`)                  | LCR, NSFR |
-| `krp01`   | Financing / receivables (`tanggalJatuhTempo`, `kualitas`, `jumlah`) | LCR, NSFR |
+| File           | Description                                                          | Used In         |
+| -------------- | --------------------------------------------------------------------- | ---------------- |
+| `NeracaHarian` | Daily Balance Sheet — sheets **ASET**, **RANGKUMAN**, **RKA**          | LCR, NSFR, ILAAP |
+| `PenempatanBI` | BI Placement (FASBIS `F08`, Giro BI `F09`)                            | LCR, NSFR        |
+| `SBI`          | Sertifikat Bank Indonesia instrument data (`SedangDiagunkan`, `nominal`) | LCR, NSFR      |
+| `Tabungan`     | Savings accounts                                                       | LCR, NSFR, ILAAP |
+| `Giro`         | Current accounts                                                       | LCR, NSFR, ILAAP |
+| `Deposito`     | Time deposits, with `tanggalJatuhTempo`                                | LCR, NSFR, ILAAP |
+| `Pinjaman`     | Loans / financing (`tanggalJatuhTempo`, `kualitas`, `jumlah`)          | LCR, NSFR, ILAAP |
+| `KewajibanGWMPLM` | GWM/PLM/BI-sourced-liquidity figures                                | ILAAP (Modul 1)  |
 
-Upload via the sidebar file uploader. Optionally upload the OJK Excel template for regulatory report export.
+Upload via the sidebar file uploader. Optionally upload the OJK Excel template for regulatory
+report export (LCR/NSFR pages only).
 
 ---
 
 ## LCR Calculation Logic
 
-**Formula:** `LCR = HQLA / (Total Outflow − min(Inflow, 75% × Total Outflow)) × 100%`  
+**Formula:** `LCR = HQLA / (Total Outflow − min(Inflow, 75% × Total Outflow)) × 100%`
 **Minimum required:** 100% per POJK No. 20 Tahun 2025
 
 | Component                | Method                                                                            |
-| ------------------------ | --------------------------------------------------------------------------------- |
-| **HQLA**                 | Cash + BI Placement (Giro BI net of GWM 3.5% × DPK + FASBIS + SUKBI unencumbered) |
-| **Outflow — Retail**     | Stable ≤ IDR 2B → 5%; Unstable → 10%                                              |
-| **Outflow — SME (UMK)**  | Stable ≤ IDR 2B → 5%; Unstable → 10%                                              |
-| **Outflow — Corporate**  | Op + LPS → 5%; Op + non-LPS → 25%; Non-Op + LPS → 20%; Non-Op + non-LPS → 40%     |
-| **Outflow — Additional** | Undrawn financing → 10%; Guarantees → 5%                                          |
-| **Inflow**               | Performing counterparty receivables ≤30d → 50%; Other bank placement → 0%         |
-| **Inflow cap**           | min(Total Inflow, 75% × Total Outflow)                                            |
+| ------------------------ | ----------------------------------------------------------------------------------- |
+| **HQLA**                 | Cash + BI Placement (Giro BI net of GWM 3.5% × DPK + FASBIS + SBI unencumbered)      |
+| **Outflow — Retail**     | Stable ≤ IDR 2B → 5%; Unstable → 10%                                                 |
+| **Outflow — SME (UMK)**  | Stable ≤ IDR 2B → 5%; Unstable → 10%                                                 |
+| **Outflow — Corporate**  | Op + LPS → 5%; Op + non-LPS → 25%; Non-Op + LPS → 20%; Non-Op + non-LPS → 40%        |
+| **Outflow — Additional** | Undrawn financing → 10%; Guarantees → 5%                                             |
+| **Inflow**               | Performing counterparty receivables ≤30d → 50%; Other bank placement → 0%           |
+| **Inflow cap**           | min(Total Inflow, 75% × Total Outflow)                                              |
+
+The run-off/inflow rate tables above are implemented once, as `get_runoff_rate()` /
+`get_inflow_rate()` / `get_additional_outflow_rate()` in `lcr_engine.py` — the single source of
+truth reused by both `lcr_calculation()` and the ILAAP Survival Period ladder, so the two never
+drift apart.
 
 ---
 
 ## NSFR Calculation Logic
 
-**Formula:** `NSFR = ASF / RSF × 100%`  
+**Formula:** `NSFR = ASF / RSF × 100%`
 **Minimum required:** 100% per POJK No. 20 Tahun 2025
 
 ### ASF (Available Stable Funding)
 
 | Component                                            | Factor |
-| ---------------------------------------------------- | ------ |
-| Retail & SME — stable demand deposits (tab, giro)    | 95%    |
-| Retail & SME — stable deposits (deposito) all tenors | 95%    |
-| Retail & SME — less stable (demand + deposits)       | 90%    |
-| Corporate — operational (tab, giro)                  | 50%    |
-| Corporate — non-operational deposits                 | 50%    |
-| Tier 1 Capital                                       | 100%   |
+| ----------------------------------------------------- | ------ |
+| Retail & SME — stable demand deposits (tab, giro)     | 95%    |
+| Retail & SME — stable deposits (deposito) all tenors  | 95%    |
+| Retail & SME — less stable (demand + deposits)        | 90%    |
+| Corporate — operational (tab, giro)                   | 50%    |
+| Corporate — non-operational deposits                  | 50%    |
+| Tier 1 Capital                                        | 100%   |
 
 ### RSF (Required Stable Funding)
 
 | Component                                        | Factor |
-| ------------------------------------------------ | ------ |
-| HQLA (Cash, FASBIS, Giro BI, SUKBI unencumbered) | 0%     |
-| Interbank placement                              | 15%    |
-| Performing financing < 6 months                  | 50%    |
-| Performing financing 6m – 1yr                    | 50%    |
-| Performing financing ≥ 1 year                    | 65%    |
-| Non-performing financing (NPF, kualitas ≥ 3)     | 100%   |
-| Non-HQLA securities (unencumbered)               | 50%    |
-| Fixed assets                                     | 100%   |
-| Other assets                                     | 100%   |
+| ------------------------------------------------- | ------ |
+| HQLA (Cash, FASBIS, Giro BI, SBI unencumbered)     | 0%     |
+| Interbank placement                               | 15%    |
+| Performing financing < 6 months                   | 50%    |
+| Performing financing 6m – 1yr                     | 50%    |
+| Performing financing ≥ 1 year                     | 65%    |
+| Non-performing financing (NPF, kualitas ≥ 3)      | 100%   |
+| Non-HQLA securities (unencumbered)                | 50%    |
+| Fixed assets                                      | 100%   |
+| Other assets                                      | 100%   |
+
+### Excel export — leftover template data
+
+`Template NSFR.xlsx` (obtained from OJK) ships pre-filled with a fictional example bank's
+figures on many rows the engine doesn't compute, and its own `Total ASF`/`Total RSF`/`NSFR%`
+formulas (column K, "Total Nilai Tertimbang") sum whatever raw numbers sit in the value cells —
+including those leftovers. `generate_nsfr_report_excel()` therefore wipes every plain-number
+leaf cell in the ASF/RSF value columns before writing in the figures this engine actually
+computed, so the exported ratio matches the one shown in Streamlit exactly. It also clears two
+`#REF!` formulas baked into the raw template (`C66`, `G151`) that have no corresponding figure in
+`rsf_calc()`'s output.
+
+---
+
+## ILAAP — Internal Liquidity Adequacy Assessment Process
+
+Implements SEOJK No. 26/SEOJK.03/2025, on the **Stress Testing (ILAAP)** page. Full spec at
+[`docs/SPEK_MODUL_ILAAP.md`](docs/SPEK_MODUL_ILAAP.md).
+
+### Modul 1 — Available HQLA
+
+```
+Available HQLA = Total HQLA − Kewajiban GWM − Kewajiban PLM − Sumber Likuiditas dari Bank Sentral
+```
+
+Reuses `lcr_engine.hqla_calc()` as-is (no duplicated haircut logic). GWM is passed as 0 because
+`hqla_calc()` already nets it out of the Giro BI balance; PLM is a **placeholder assumption**
+(a slider, default 3% × DPK) — the real PLM obligation must be confirmed with the Bank/BI before
+production use.
+
+### Modul 2 — Survival Period Monitoring
+
+A 19-bucket cash-flow ladder (overnight → beyond 5 years) projecting every non-HQLA balance-sheet
+item (Tabungan, Giro, Deposito, Pinjaman, off-balance-sheet commitments) to its contractual
+maturity, weighted by the same run-off/inflow rates as LCR. **Does not apply the LCR 75% inflow
+cap** — SEOJK 26/2025 §10.21 explicitly excludes it here. Three official scenarios are
+implemented: `lcr_30_hari` and three `benchmark_90_hari_*` segment-isolation scenarios.
+
+The survival horizon is compared against a Bank-set target (default 90 days, adjustable). If the
+target isn't met, the page reports the shortfall — but **does not** compute a Pillar 2 add-on
+percentage: the source regulation describes the concept without a uniform conversion formula, and
+`compute_add_on_percent()` deliberately raises `NotImplementedError` until the Bank's Risk
+Management & Compliance division confirms a methodology. Don't guess this number.
+
+Every run is independently reconciled (`ilaap/audit.py`) — net outflow is recomputed via a
+separate aggregation path and compared bucket-by-bucket against the main calculation, PASS/FAIL,
+the same control principle as `audit_log.reconcile()` for LCR/NSFR.
+
+### Not yet implemented
+
+Modul 3 (LCR per Mata Uang Signifikan), Modul 4 (Roll Over Funding Monitoring) and Modul 6
+(Laporan Profil Pendanaan) are specified in `docs/SPEK_MODUL_ILAAP.md` but not built — each has
+open questions (official SEOJK annex format, rollover-vs-new-funding identification) that need
+Bank/regulator confirmation first. Likuiditas Intrahari & Intragrup are explicitly out of scope
+(different data sources entirely — see spec §9).
+
+---
+
+## AI Executive Summary
+
+Generates board-ready narrative commentary from whichever of LCR, NSFR and ILAAP results are
+present in the current session (`src/ai_summary.py`, page `3_AI_Summary.py`):
+
+- **LCR only**, **NSFR only**, **ILAAP only**, or a **Combined** executive summary that
+  automatically folds in ILAAP survival-period status when available.
+- The on-screen scorecard (LCR, HQLA, NSFR, ASF, NPF ratio, LDR, Survival Horizon, ILAAP Add-On
+  status) is **exactly** the numeric context sent to the model — nothing hidden, nothing extra.
+- The system prompt instructs the model to say a figure is unavailable rather than estimate it,
+  and never to invent a Pillar 2 add-on percentage.
 
 ---
 
 ## Exports
 
 | Format                  | Description                                                                      |
-| ----------------------- | -------------------------------------------------------------------------------- |
-| **JSON Summary**        | Full breakdown of all components + ratio value                                   |
-| **Excel Report (LCR)**  | Values mapped into OJK `Template LCR.xlsx`                                       |
-| **Excel Report (NSFR)** | Values mapped into OJK `Template NSFR.xlsx`                                      |
-| **Audit Pack (Excel)**  | Run summary, event log, ratio arithmetic, reconciliation, LCR & NSFR derivations |
-| **Audit Events (CSV)**  | Flat event log for GRC tooling                                                   |
-| **Audit Trace (JSON)**  | Machine-readable full trace for retention                                        |
+| ------------------------ | ----------------------------------------------------------------------------------- |
+| **JSON Summary**         | Full breakdown of all components + ratio value (LCR, NSFR)                          |
+| **Excel Report (LCR)**   | Values mapped into OJK `Template LCR.xlsx`                                          |
+| **Excel Report (NSFR)**  | Values mapped into OJK `Template NSFR.xlsx`, leftover template data cleared         |
+| **Audit Pack (Excel)**   | Run summary, event log, ratio arithmetic, reconciliation, LCR & NSFR derivations     |
+| **Audit Events (CSV)**   | Flat event log for GRC tooling                                                       |
+| **Audit Trace (JSON)**   | Machine-readable full trace for retention                                            |
+| **AI Summary (Markdown)**| Downloadable copy of the generated executive summary                                |
 
 ---
 
 ## Audit Log
 
-The **Audit Log** page (`src/audit_log.py`) answers the question internal audit always asks:
-_how was this number produced?_ It records, for the current session:
+The **Audit Log** page (`src/audit_log.py`, extended by `src/ilaap/audit.py`) answers the
+question internal audit always asks: _how was this number produced?_ It records, for the current
+session:
 
 | Captured              | Detail                                                                                                                      |
-| --------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | **Source files**      | Filename, byte size and **SHA-256 fingerprint** of every uploaded file, so a run can be proven to have used specific inputs |
 | **Parameters**        | Reporting (as-of) date and any stress assumptions applied                                                                   |
 | **Calculation steps** | Every weighting as `base amount × regulatory factor = weighted amount`, with the rule that sets the factor                  |
 | **Ratio arithmetic**  | The final formula written out step by step, including the LCR inflow cap and the headroom against the 100% minimum          |
+| **Survival Period**   | The full 19-bucket ladder for every ILAAP run, not just the final figure, plus the add-on flag if triggered                 |
 | **Exports**           | Every OJK report generated, with template name and output size                                                              |
 | **AI generations**    | Model, scope and response size for each executive summary                                                                   |
 | **Errors**            | Any failed calculation, with exception type                                                                                 |
@@ -206,11 +362,12 @@ _how was this number produced?_ It records, for the current session:
 
 The derivation tables in `audit_log.py` are **declarative restatements** of the factors the
 engines apply. `reconcile()` re-adds the traced line items independently and compares the result
-against the engine's own totals (tolerance IDR 1). Every check must read **PASS**.
+against the engine's own totals (tolerance IDR 1); `ilaap/audit.reconcile_ladder()` does the same
+for the Survival Period ladder, bucket-by-bucket. Every check must read **PASS**.
 
 This makes the audit log a _control over_ the calculation rather than merely a description of it:
 if someone edits a factor in an engine without updating the derivation spec, the reconciliation
-fails loudly on the Audit Log page instead of silently reporting a wrong number.
+fails loudly instead of silently reporting a wrong number.
 
 The engines are deliberately left untouched by the logging — calculation rates and logic must not
 change without regulatory review.
@@ -220,19 +377,38 @@ change without regulatory review.
 
 ---
 
+## Testing
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+Covers the ILAAP module: bucket assignment, the run-off/inflow rate tables, a regression check
+that the `lcr_engine.py` rate-table refactor didn't change the LCR result, synthetic golden-path
+tests reproducing the "Bank A" (target met) and "Bank B" (add-on required) patterns from the
+source spec, and end-to-end runs against `database/dummy/` with reconciliation asserted PASS.
+Plain `unittest` is used deliberately — no `pytest` dependency in this repo.
+
+---
+
 ## Architecture
 
 ```
 app.py  (Streamlit entry point / Home)
-  ├── pages/1_LCR.py    → imports lcr_engine.py
-  └── pages/2_NSFR.py   → imports nsfr_engine.py
+  ├── pages/1_LCR.py            → imports lcr_engine.py
+  ├── pages/2_NSFR.py           → imports nsfr_engine.py
+  ├── pages/4_Stress_Testing.py → imports ilaap/ (reuses pages/1_LCR.py's session results)
+  └── pages/3_AI_Summary.py     → imports ai_summary.py (reuses LCR/NSFR/ILAAP session results)
 ```
 
-Business logic is fully separated from UI. To run calculations programmatically without the UI, import directly:
+Business logic is fully separated from UI. To run calculations programmatically without the UI,
+import directly:
 
 ```python
 from src.lcr_engine import hqla_calc, lcr_calculation
 from src.nsfr_engine import asf_calc, rsf_calc, nsfr_calculation
+from src.ilaap.available_hqla import available_hqla_calc
+from src.ilaap.survival_period import project_cashflow_ladder, determine_survival_period
 ```
 
 ---
@@ -240,12 +416,17 @@ from src.nsfr_engine import asf_calc, rsf_calc, nsfr_calculation
 ## Notes
 
 - The Streamlit app uses file uploads only — nothing needs to be present in `database/`,
-  `template/` or `docs/` to run the app. Those folders are git-ignored; keep your own local
-  copies for development, or upload files fresh each session.
+  `template/` or `docs/` to run the app (except `database/dummy/`, which ships with the repo).
 - `GEMINI_API_KEY` in a pre-existing `.env` is a leftover from before the AI Summary page moved
   to the OpenModel gateway — it is unused by any code in `src/` and can be removed.
-- Adjust run-off rates and ASF/RSF factors in the engine files if your bank's internal policy differs from the default POJK framework.
-- NSFR Tier 1 capital component requires a capital adequacy report — populate `tier1_capital` in `nsfr_engine.py` accordingly.
+- Adjust run-off rates and ASF/RSF factors in `lcr_engine.py` / `nsfr_engine.py` if your bank's
+  internal policy differs from the default POJK framework — via `get_runoff_rate()` /
+  `get_inflow_rate()` / `get_additional_outflow_rate()`, not by editing call sites.
+- NSFR Tier 1 capital component requires a capital adequacy report — populate `tier1_capital` in
+  `nsfr_engine.py` accordingly (currently hardcoded to 0).
+- ILAAP's PLM obligation is a placeholder assumption, and the Pillar 2 add-on percentage is
+  intentionally unimplemented — both need Bank/regulator confirmation before production use. See
+  `docs/SPEK_MODUL_ILAAP.md` §12 for the full list of open questions.
 
 ---
 

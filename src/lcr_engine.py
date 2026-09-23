@@ -49,6 +49,63 @@ def safe_read_excel(file, **kwargs) -> pd.DataFrame:
         return pd.read_excel(file, **kwargs)
 
 
+# ── Regulatory rate tables (POJK No. 20/2025) ──────────────────────────────
+# Single source of truth for LCR run-off / inflow factors. Extracted so the
+# ILAAP Survival Period module (src/ilaap/survival_period.py) can reuse the
+# same factors without duplicating the numbers — it does NOT reuse
+# lcr_calculation() itself (that applies the 75% inflow cap, which does not
+# apply to survival period per SEOJK 26/2025 §10.21).
+
+def get_runoff_rate(segmen: str, *, stabilitas: str | None = None,
+                     operasional: bool | None = None,
+                     dijamin_lps: bool | None = None) -> float:
+    """LCR cash-outflow run-off rate for a funding row.
+
+    segmen: 'retail' | 'umk' | 'korporasi' (case-insensitive)
+    stabilitas: 'stabil' | 'tidak_stabil' — required for retail/umk
+    operasional, dijamin_lps: bool — required for korporasi
+    """
+    segmen = segmen.strip().lower()
+    if segmen in ("retail", "umk"):
+        if stabilitas is None:
+            raise ValueError("stabilitas is required for retail/umk run-off rate")
+        return 0.05 if stabilitas.strip().lower() == "stabil" else 0.10
+    if segmen == "korporasi":
+        if operasional is None or dijamin_lps is None:
+            raise ValueError("operasional and dijamin_lps are required for korporasi run-off rate")
+        if operasional and dijamin_lps:
+            return 0.05
+        if operasional and not dijamin_lps:
+            return 0.25
+        if not operasional and dijamin_lps:
+            return 0.20
+        return 0.40
+    raise ValueError(f"Unknown segmen for run-off rate: {segmen!r}")
+
+
+def get_additional_outflow_rate(jenis: str) -> float:
+    """Off-balance-sheet LCR outflow rate. jenis: 'undrawn_commitment' | 'guarantee'."""
+    jenis = jenis.strip().lower()
+    if jenis == "undrawn_commitment":
+        return 0.10
+    if jenis == "guarantee":
+        return 0.05
+    raise ValueError(f"Unknown jenis for additional outflow rate: {jenis!r}")
+
+
+def get_inflow_rate(jenis_counterparty: str) -> float:
+    """LCR cash-inflow rate. jenis_counterparty:
+    'counterparty_performing' (receivables, performing, <=30d) -> 50%
+    'interbank_placement' (placement at other banks)            -> 0%
+    """
+    jenis_counterparty = jenis_counterparty.strip().lower()
+    if jenis_counterparty == "counterparty_performing":
+        return 0.5
+    if jenis_counterparty == "interbank_placement":
+        return 0.0
+    raise ValueError(f"Unknown jenis_counterparty for inflow rate: {jenis_counterparty!r}")
+
+
 # ── HQLA ─────────────────────────────────────────────────────────────────────
 
 def hqla_calc(df_nrc_aset: pd.DataFrame, df_nrc_rangkuman: pd.DataFrame,
@@ -117,8 +174,8 @@ def outflow_retail(df_tab, df_giro, df_depo, asof_date: str) -> dict:
     unstable = (df_tab_r.loc[df_tab_r['kategoriStabilitas']   == 'Tidak Stabil', 'jumlahBulanLaporanActive'].sum()
               + df_giro_r.loc[df_giro_r['kategoriStabilitas'] == 'Tidak Stabil', 'jumlahBulanLaporanActive'].sum()
               + df_depo_r.loc[df_depo_r['kategoriStabilitas'] == 'Tidak Stabil', 'jumlahBulanLaporanActive'].sum())
-    out_stable   = 0.05 * stable
-    out_unstable = 0.10 * unstable
+    out_stable   = get_runoff_rate("retail", stabilitas="stabil") * stable
+    out_unstable = get_runoff_rate("retail", stabilitas="tidak_stabil") * unstable
     return {
         "Retail Stable Funding":              stable,
         "Retail Unstable Funding":            unstable,
@@ -146,8 +203,8 @@ def outflow_umk(df_tab, df_giro, df_depo, asof_date: str) -> dict:
     unstable = (df_tab_u.loc[df_tab_u['kategoriStabilitas']   == 'Tidak Stabil', 'jumlahBulanLaporanActive'].sum()
               + df_giro_u.loc[df_giro_u['kategoriStabilitas'] == 'Tidak Stabil', 'jumlahBulanLaporanActive'].sum()
               + df_depo_u.loc[df_depo_u['kategoriStabilitas'] == 'Tidak Stabil', 'jumlahBulanLaporanActive'].sum())
-    out_stable   = 0.05 * stable
-    out_unstable = 0.10 * unstable
+    out_stable   = get_runoff_rate("umk", stabilitas="stabil") * stable
+    out_unstable = get_runoff_rate("umk", stabilitas="tidak_stabil") * unstable
     return {
         "SME Stable Funding":            stable,
         "SME Unstable Funding":          unstable,
@@ -181,10 +238,10 @@ def outflow_corp(df_tab, df_giro, df_depo, asof_date: str) -> dict:
     total_nop_nlps = sum_amt(df_tab_c, 'Non Operasional', 'Tidak Dijamin LPS') + sum_amt(df_giro_c, 'Non Operasional', 'Tidak Dijamin LPS') + sum_amt(df_depo_c, 'Non Operasional', 'Tidak Dijamin LPS')
     total_corp     = total_op_lps + total_op_nlps + total_nop_lps + total_nop_nlps
 
-    out_op_lps   = 0.05 * total_op_lps
-    out_op_nlps  = 0.25 * total_op_nlps
-    out_nop_lps  = 0.20 * total_nop_lps
-    out_nop_nlps = 0.40 * total_nop_nlps
+    out_op_lps   = get_runoff_rate("korporasi", operasional=True,  dijamin_lps=True)  * total_op_lps
+    out_op_nlps  = get_runoff_rate("korporasi", operasional=True,  dijamin_lps=False) * total_op_nlps
+    out_nop_lps  = get_runoff_rate("korporasi", operasional=False, dijamin_lps=True)  * total_nop_lps
+    out_nop_nlps = get_runoff_rate("korporasi", operasional=False, dijamin_lps=False) * total_nop_nlps
     return {
         "Corp Operational — LPS Covered":            total_op_lps,
         "Corp Operational — LPS Covered (5%)":       out_op_lps,
@@ -211,8 +268,8 @@ def outflow_additional(df_rka: pd.DataFrame) -> dict:
 
     total_komitmen   = sum_by_pattern(r"FASILITAS\s+(PEMBIAYAAN)\s+YANG\s+BELUM\s+DITARIK")
     total_kontijensi = sum_by_pattern(r"GARANSI\s+YANG\s+DIBERIKAN")
-    out_komitmen     = 0.10 * total_komitmen
-    out_kontijensi   = 0.05 * total_kontijensi
+    out_komitmen     = get_additional_outflow_rate("undrawn_commitment") * total_komitmen
+    out_kontijensi   = get_additional_outflow_rate("guarantee") * total_kontijensi
     return {
         "Undrawn Financing Commitment":          total_komitmen,
         "Undrawn Financing Commitment (10%)":    out_komitmen,
@@ -231,9 +288,9 @@ def inflow_counterparty(df_fin: pd.DataFrame, df_nrc_aset: pd.DataFrame, asof_da
     df = df[(df['tenorHari'] > 0) & (df['tenorHari'] <= 30)]
     df = df[df['kualitas'] == 1]
     total_tagihan   = df['jumlah'].sum()
-    rate_tagihan    = 0.5 * total_tagihan
+    rate_tagihan    = get_inflow_rate("counterparty_performing") * total_tagihan
     total_placement = df_nrc_aset.loc[df_nrc_aset['KETERANGAN'] == 'PENEMPATAN PADA BANK LAIN', 'REALISASI'].values[0]
-    rate_placement  = 0.0
+    rate_placement  = get_inflow_rate("interbank_placement") * total_placement
     return {
         "Counterparty Receivables (<=30d, Performing)": total_tagihan,
         "Total Inflow Tagihan Counterparty (50%)":       rate_tagihan,

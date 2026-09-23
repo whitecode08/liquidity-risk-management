@@ -65,15 +65,15 @@ with col1:
 <div class="lcr-card">
   <div class="section-label">LCR — Required Source Files</div>
   <table class="ref-table">
-    <thead><tr><th>File Key</th><th>Description</th></tr></thead>
+    <thead><tr><th>File</th><th>Description</th></tr></thead>
     <tbody>
-      <tr><td><code>nrc01</code></td><td>Daily Balance Sheet (ASET, RANGKUMAN, RKA)</td></tr>
-      <tr><td><code>pbi01</code></td><td>BI Placement (FASBIS, Giro BI)</td></tr>
-      <tr><td><code>sym01</code></td><td>SUKBI instrument data</td></tr>
-      <tr><td><code>tab01</code></td><td>Tabungan (savings)</td></tr>
-      <tr><td><code>gir01</code></td><td>Giro (current accounts)</td></tr>
-      <tr><td><code>dep01</code></td><td>Deposito (time deposits)</td></tr>
-      <tr><td><code>krp01</code></td><td>Financing / receivables</td></tr>
+      <tr><td><code>NeracaHarian</code></td><td>Daily Balance Sheet (ASET, RANGKUMAN, RKA)</td></tr>
+      <tr><td><code>PenempatanBI</code></td><td>BI Placement (FASBIS, Giro BI)</td></tr>
+      <tr><td><code>SBI</code></td><td>Sertifikat Bank Indonesia instrument data</td></tr>
+      <tr><td><code>Tabungan</code></td><td>Savings accounts</td></tr>
+      <tr><td><code>Giro</code></td><td>Current accounts</td></tr>
+      <tr><td><code>Deposito</code></td><td>Time deposits</td></tr>
+      <tr><td><code>Pinjaman</code></td><td>Loans / receivables</td></tr>
     </tbody>
   </table>
 </div>
@@ -83,15 +83,15 @@ with col2:
 <div class="lcr-card">
   <div class="section-label">NSFR — Required Source Files</div>
   <table class="ref-table">
-    <thead><tr><th>File Key</th><th>Description</th></tr></thead>
+    <thead><tr><th>File</th><th>Description</th></tr></thead>
     <tbody>
-      <tr><td><code>nrc01</code></td><td>Daily Balance Sheet (ASET, RANGKUMAN)</td></tr>
-      <tr><td><code>pbi01</code></td><td>BI Placement — for RSF HQLA</td></tr>
-      <tr><td><code>sym01</code></td><td>SUKBI — for RSF HQLA</td></tr>
-      <tr><td><code>tab01</code></td><td>Tabungan — retail &amp; SME ASF</td></tr>
-      <tr><td><code>gir01</code></td><td>Giro — retail, SME &amp; corp ASF</td></tr>
-      <tr><td><code>dep01</code></td><td>Deposito — maturity-bucketed ASF</td></tr>
-      <tr><td><code>krp01</code></td><td>Financing — RSF by quality</td></tr>
+      <tr><td><code>NeracaHarian</code></td><td>Daily Balance Sheet (ASET, RANGKUMAN)</td></tr>
+      <tr><td><code>PenempatanBI</code></td><td>BI Placement — for RSF HQLA</td></tr>
+      <tr><td><code>SBI</code></td><td>Sertifikat Bank Indonesia — for RSF HQLA</td></tr>
+      <tr><td><code>Tabungan</code></td><td>Savings — retail &amp; SME ASF</td></tr>
+      <tr><td><code>Giro</code></td><td>Current accounts — retail, SME &amp; corp ASF</td></tr>
+      <tr><td><code>Deposito</code></td><td>Time deposits — maturity-bucketed ASF</td></tr>
+      <tr><td><code>Pinjaman</code></td><td>Loans — RSF by quality</td></tr>
     </tbody>
   </table>
 </div>

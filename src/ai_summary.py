@@ -31,9 +31,12 @@ DEFAULT_BASE_URL = "https://api.openmodel.ai"
 MODELS_URL = "https://api.openmodel.ai/web/v1/models"
 _PLACEHOLDERS = {"", "your_api_key_here", "your_key", "changeme", "xxx"}
 _SYSTEM = (
-    "You are a senior Islamic banking liquidity risk analyst advising the ALCO and Board "
-    "of a Sharia bank supervised by OJK. You write in precise, regulator-ready English and "
-    "never invent figures that were not provided to you.\n\n"
+    "You are a senior liquidity risk analyst advising the ALCO and Board of a bank "
+    "supervised by OJK (Otoritas Jasa Keuangan), assessed against POJK No. 20/2025 (LCR/NSFR) "
+    "and SEOJK No. 26/SEOJK.03/2025 (ILAAP). You write in precise, regulator-ready English and "
+    "never invent figures that were not provided to you. If a figure needed to answer a question "
+    "was not given in the data below, say explicitly that it is not available rather than "
+    "estimating or guessing it.\n\n"
     "HOUSE STYLE — follow this in every response:\n"
     "• Write in a blended style. Each section opens with a NARRATIVE PARAGRAPH of 3-5 full "
     "sentences in flowing prose that explains what the numbers mean, why the position arose "
@@ -152,8 +155,16 @@ def list_models() -> list[str]:
 
 
 # ─────────────────────────────── generation ─────────────────────────────────
-def _ask(prompt: str, model: str | None = None, max_tokens: int = 4096):
-    """Send one prompt to OpenModel. Returns (text, error_message)."""
+def _ask(prompt: str, model: str | None = None, max_tokens: int = 8000):
+    """Send one prompt to OpenModel. Returns (text, error_message).
+
+    Some models on the OpenModel catalogue are reasoning models that emit
+    `thinking` content blocks before the final `text` block. If max_tokens is
+    too small, the model can spend its entire budget thinking and return no
+    text at all — this looked to users like the app "returning no context".
+    Mitigated two ways: a generous default max_tokens, and one automatic
+    retry with double the budget if the first attempt comes back empty.
+    """
     key = get_api_key()
     if key.lower() in _PLACEHOLDERS:
         return None, (
@@ -174,22 +185,35 @@ def _ask(prompt: str, model: str | None = None, max_tokens: int = 4096):
             # The SDK sends X-Api-Key; OpenModel documents Authorization: Bearer as
             # the primary scheme, so send both and let the gateway pick.
             default_headers={"Authorization": f"Bearer {key}"},
-            timeout=120.0,
+            timeout=180.0,
             max_retries=2,
         )
-        resp = client.messages.create(
-            model=model,
-            max_tokens=max_tokens,
-            system=_SYSTEM,
-            temperature=0.3,
-            messages=[{"role": "user", "content": prompt}],
-        )
-        # Reasoning models return `thinking` blocks alongside `text` — keep the text.
-        text = "".join(
-            b.text for b in resp.content if getattr(b, "type", "") == "text"
-        ).strip()
+
+        def _generate(budget: int) -> str:
+            resp = client.messages.create(
+                model=model,
+                max_tokens=budget,
+                system=_SYSTEM,
+                temperature=0.3,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            # Reasoning models return `thinking` blocks alongside `text` — keep the text.
+            return "".join(
+                b.text for b in resp.content if getattr(b, "type", "") == "text"
+            ).strip()
+
+        text = _generate(max_tokens)
         if not text:
-            return None, f"⚠️ `{model}` returned no text content. Try another model."
+            # Likely a reasoning model that exhausted its budget thinking —
+            # retry once with double the budget before giving up.
+            text = _generate(max_tokens * 2)
+        if not text:
+            return None, (
+                f"⚠️ `{model}` returned no text content even after retrying with a larger "
+                f"token budget. This model may require a `thinking` parameter this gateway "
+                f"doesn't expose, or may not be suited to long-form generation — try a "
+                f"different model from the list (e.g. `{DEFAULT_MODEL}`)."
+            )
         return text, None
     except anthropic.AuthenticationError:
         return None, "⚠️ Authentication rejected by OpenModel. Check `OPENMODEL_API_KEY` in `.env`."
@@ -259,7 +283,53 @@ RSF: {', '.join(f'{k}: {v:,.0f}' for k, v in rsf.items() if 'RSF' in k)}""",
     )
 
 
-def combined_summary(lcr_res, nsfr_res, model: str | None = None):
+def ilaap_summary(ilaap_res, model: str | None = None):
+    """Narrative on Survival Period Monitoring (ILAAP, SEOJK No. 26/2025)."""
+    if not ilaap_res:
+        return None, "No ILAAP Survival Period results available. Run it from the Stress Testing page first."
+
+    result = ilaap_res["result"]
+    available = ilaap_res["available"]
+    add_on_note = (
+        "Add-on required, but the shortfall-to-LCR-percentage conversion methodology has not "
+        "yet been confirmed by the Bank's Risk Management & Compliance division (this is a "
+        "known, deliberate gap in the current tooling, not missing data) — do not estimate or "
+        "guess an add-on percentage."
+        if result.get("add_on_required")
+        else "No add-on required — the survival period target is met."
+    )
+    return _ask(
+        f"""Analyse this Survival Period Monitoring (ILAAP) result per SEOJK No. 26/SEOJK.03/2025
+for the ALCO. Scenario: {ilaap_res['scenario_label']}. Reporting date: {ilaap_res['asof']}.
+
+Structure the note under these headers, each written as a narrative paragraph followed by
+supporting bullets:
+1) Survival Position — state the survival horizon against the {ilaap_res['target_survival_days']}-day
+   target, and what it means operationally if the stress scenario materialised.
+2) Available HQLA Composition — explain how GWM/PLM/BI-sourced-liquidity deductions shape the
+   day-0 buffer actually available to absorb the stress, versus gross HQLA.
+3) Add-On Status — state clearly: {add_on_note}
+4) Recommendations — concrete actions for ALCO, each with the expected effect on the survival
+   horizon.
+
+Target 350-500 words. {_STYLE_REMINDER}
+
+- Scenario: {ilaap_res['scenario_label']} (no LCR 75% inflow cap applied, per SEOJK §10.21)
+- Total HQLA (gross): IDR {available['total_hqla']:,.0f}
+- GWM obligation: IDR {available['gwm_obligation']:,.0f} (already netted inside Total HQLA)
+- PLM obligation (assumption): IDR {available['plm_obligation']:,.0f}
+- BI-sourced liquidity drawn: IDR {available['bi_sourced_liquidity']:,.0f}
+- Available HQLA (Day 0): IDR {available['available_hqla']:,.0f}
+- Target survival period: {ilaap_res['target_survival_days']} days
+- Survival horizon reached: {result.get('survival_hari') if result.get('survival_hari') is not None else 'beyond the 19-bucket ladder horizon (>5 years)'}
+- Target met: {result['memenuhi_target']}
+- Add-on required: {result['add_on_required']}
+{f"- Shortfall at target bucket: IDR {result.get('shortfall_pada_target', 0):,.0f}" if result.get('add_on_required') else ""}""",
+        model=model,
+    )
+
+
+def combined_summary(lcr_res, nsfr_res, ilaap_res=None, model: str | None = None):
     if not lcr_res and not nsfr_res:
         return None, "No analysis results available. Run LCR and/or NSFR first."
     parts = []
@@ -267,17 +337,48 @@ def combined_summary(lcr_res, nsfr_res, model: str | None = None):
         parts.append(
             f"LCR: {lcr_res['lcr'].get('LCR', 0):.2f}%, "
             f"HQLA: {lcr_res['lcr']['Total HQLA']:,.0f}, "
-            f"Outflow: {lcr_res['lcr']['Total Cash Outflow']:,.0f}"
+            f"Outflow: {lcr_res['lcr']['Total Cash Outflow']:,.0f}, "
+            f"Inflow: {lcr_res['lcr']['Total Cash Inflow']:,.0f}, "
+            f"Retail outflow: {lcr_res['outflow'].get('Total Outflow Pendanaan Perorangan', 0):,.0f}, "
+            f"SME outflow: {lcr_res['outflow'].get('Total Outflow Pendanaan UMK', 0):,.0f}, "
+            f"Corporate outflow: {lcr_res['outflow'].get('Total Outflow Pendanaan Korporasi', 0):,.0f}"
         )
     if nsfr_res:
+        rsf = nsfr_res["rsf"]
+        performing = rsf.get("perf_A", 0) + rsf.get("perf_B", 0) + rsf.get("perf_C", 0)
+        npf = rsf.get("npf", 0)
+        npf_ratio = (npf / (performing + npf) * 100) if (performing + npf) else 0.0
+        ldr_row = nsfr_res["dfs"]["nrc_rangkuman"]
+        ldr_match = ldr_row.loc[ldr_row["KETERANGAN"] == "LDR", "REALISASI"]
+        ldr_pct = float(ldr_match.iloc[0]) * 100 if len(ldr_match) else None
         parts.append(
             f"NSFR: {nsfr_res['nsfr'].get('NSFR', 0):.2f}%, "
             f"ASF: {nsfr_res['nsfr']['Total ASF']:,.0f}, "
-            f"RSF: {nsfr_res['nsfr']['Total RSF']:,.0f}"
+            f"RSF: {nsfr_res['nsfr']['Total RSF']:,.0f}, "
+            f"NPF ratio: {npf_ratio:.2f}%"
+            + (f", LDR: {ldr_pct:.1f}%" if ldr_pct is not None else "")
+        )
+    ilaap_section = ""
+    if ilaap_res:
+        result, available = ilaap_res["result"], ilaap_res["available"]
+        parts.append(
+            f"ILAAP Survival Period ({ilaap_res['scenario_label']}): "
+            f"Available HQLA Day 0: {available['available_hqla']:,.0f}, "
+            f"target {ilaap_res['target_survival_days']} days, "
+            f"survival horizon: {result.get('survival_hari', '>5 years')}, "
+            f"target met: {result['memenuhi_target']}, "
+            f"add-on required: {result['add_on_required']} "
+            f"(add-on percentage not computed — methodology pending Bank policy confirmation)"
+        )
+        ilaap_section = (
+            "\n4) ILAAP Survival Period — the stress-scenario survival horizon versus the Bank's "
+            "target, and what it implies alongside the point-in-time LCR/NSFR figures above. If "
+            "add-on is flagged as required, state plainly that the add-on percentage itself is "
+            "not yet computable (policy pending) — do not invent one.\n"
         )
     return _ask(
         f"""Write an executive summary on the combined liquidity position for the Board of
-Directors, assessed against POJK No. 20/2025:
+Directors, assessed against POJK No. 20/2025 (LCR/NSFR){" and SEOJK No. 26/SEOJK.03/2025 (ILAAP)" if ilaap_res else ""}:
 {chr(10).join(parts)}
 
 Open with a short **Executive Overview** — two paragraphs of continuous prose, no bullets — that
@@ -285,21 +386,22 @@ states the overall verdict, the single most important issue facing the Board, an
 asked of them. Then work through these sections, each opening with its narrative paragraph and
 closing with supporting bullets:
 
-1) Overall Liquidity Health — reconcile the two ratios into one judgement. Where they point in
+1) Overall Liquidity Health — reconcile the ratios above into one judgement. Where they point in
    different directions, explain why that divergence arises and which signal should govern.
 2) LCR Compliance and Key Drivers — the 30-day position, its headroom, and what sustains it.
-3) NSFR Structural Funding Adequacy — the one-year position and the durability of the funding base.
-4) Cross-Ratio Interactions — how actions taken to defend one ratio affect the other. Be specific
-   about the trade-off: lengthening liability tenor, shifting into HQLA, or repricing deposits all
-   move both ratios, not always in the same direction.
-5) Strategic Recommendations for ALCO — prioritised actions, each with the expected effect on both
-   ratios and an indicative timeframe.
-6) Early Warning Indicators — the specific metrics and thresholds that should trigger escalation
-   before either ratio is breached.
+3) NSFR Structural Funding Adequacy — the one-year position, the durability of the funding base,
+   and what the NPF/LDR figures say about underlying asset quality.
+{ilaap_section}5) Cross-Ratio Interactions — how actions taken to defend one ratio affect the others. Be
+   specific about the trade-off: lengthening liability tenor, shifting into HQLA, or repricing
+   deposits all move these metrics, not always in the same direction.
+6) Strategic Recommendations for ALCO — prioritised actions, each with the expected effect on the
+   ratios above and an indicative timeframe.
+7) Early Warning Indicators — the specific metrics and thresholds that should trigger escalation
+   before any ratio is breached or the survival target is missed.
 
-Target 800-1000 words. {_STYLE_REMINDER}
+Target 800-1100 words. {_STYLE_REMINDER}
 Close with one sentence noting that the figures derive from the bank's own reported source files
 and that the calculation trace is available in the system's audit log.""",
         model=model,
-        max_tokens=6000,
+        max_tokens=10000,
     )

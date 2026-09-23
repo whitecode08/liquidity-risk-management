@@ -1,0 +1,32 @@
+# Stress scenario families for Survival Period Monitoring (SEOJK No.
+# 26/SEOJK.03/2025 §10.19-10.26). Only the three core/benchmark scenarios are
+# implemented in this revision. The "enhance" scenarios (multipliers on top of
+# a base scenario) are deliberately NOT implemented yet — the source document
+# describes the concept but leaves the multiplier values as placeholders that
+# must be confirmed with the Bank's Risk Management division before coding
+# (see docs/SPEK_MODUL_ILAAP.md §5.4, §12 item 8). Add them here once decided.
+
+scenarios:
+  - id: lcr_30_hari
+    label: "Stress Testing LCR (30 hari)"
+    horizon_hari: 30
+    no_tenor_distribution: hari_pertama   # on-demand funding assumed to run off entirely at H+0
+    segmen_terdampak: null                # null = semua segmen terdampak
+
+  - id: benchmark_90_hari_ritel
+    label: "Benchmark 90 hari — stres segmen ritel"
+    horizon_hari: 90
+    no_tenor_distribution: satu_kali_h1_sampai_h30   # materialize once, spread evenly across H1-H30
+    segmen_terdampak: [retail, umk]
+
+  - id: benchmark_90_hari_korporasi
+    label: "Benchmark 90 hari — stres segmen korporasi"
+    horizon_hari: 90
+    no_tenor_distribution: satu_kali_h1_sampai_h30
+    segmen_terdampak: [korporasi]
+
+  - id: benchmark_90_hari_gabungan
+    label: "Benchmark 90 hari — ritel + korporasi bersamaan"
+    horizon_hari: 90
+    no_tenor_distribution: satu_kali_h1_sampai_h30
+    segmen_terdampak: [retail, umk, korporasi]

@@ -257,11 +257,45 @@ def generate_nsfr_report_excel(template_file, hasil_asf: dict, hasil_rsf: dict, 
     ws = wb.active
     fmt = '_-* #,##0_-;[Red]_* (#,##0)_-;_-* "-"??_-;_-@_-'
 
-    # Fix the #REF! error in the native template
-    try:
-        ws['G151'].value = None
-    except Exception:
-        pass
+    # Fix the #REF! errors baked into the native template. The raw template
+    # ships with FOUR broken `=#REF!` formulas (verified against
+    # template/Template NSFR.xlsx): C54, E55, C66, G151.
+    #   - C54 and E55 are legitimate value cells for "kas dan setara kas" and
+    #     "penempatan pada Bank Indonesia" — the mappings below overwrite them
+    #     with real figures, which clears the #REF! as a side effect.
+    #   - C66 ("Simpanan/penempatan dana pada lembaga keuangan lain UNTUK
+    #     aktivitas operasional — unencumbered") and G151 (undrawn commitment
+    #     off-balance-sheet) have no corresponding figure anywhere in
+    #     rsf_calc()'s output — the source data does not split interbank
+    #     placements into operational vs. non-operational, so there is
+    #     nothing legitimate to put there. Clear them explicitly rather than
+    #     leaving a #REF! in the exported report.
+    for ref_cell in ("C66", "G151"):
+        try:
+            ws[ref_cell].value = None
+        except Exception:
+            pass
+
+    # Wipe leftover sample figures baked into the raw template. The template
+    # ships pre-filled with a fictional example bank's numbers on many leaf
+    # rows the engine doesn't compute (e.g. row 118 "pembiayaan beragun rumah
+    # tinggal/KPR" alone carries ~Rp 374 miliar of example data), and even on
+    # rows we DO map, only one of the four tenor-bucket columns is ours — the
+    # other three still hold the example bank's figures. Because Total ASF /
+    # Total RSF / NSFR% (column K, "Total Nilai Tertimbang") are computed by
+    # the template's OWN formulas from these raw value cells, every leftover
+    # number silently inflates the exported ratio with data that has nothing
+    # to do with the bank whose files were actually uploaded — this is why
+    # the exported Excel's NSFR% did not match the Streamlit-computed NSFR.
+    # Fix: blank every plain-number leaf cell in the ASF (rows 5-44) and RSF
+    # (rows 52-148) value columns (C/E/G/I only — factor columns D/F/H/J and
+    # subtotal formula cells like "=SUM(...)" are left untouched) before
+    # writing in the figures this engine actually computed.
+    for r in list(range(5, 45)) + list(range(52, 149)):
+        for col in ("C", "E", "G", "I"):
+            cell = ws[f"{col}{r}"]
+            if isinstance(cell.value, (int, float)):
+                cell.value = None
 
     # Exact Cell Mappings
     mappings = {
@@ -286,11 +320,19 @@ def generate_nsfr_report_excel(template_file, hasil_asf: dict, hasil_rsf: dict, 
         "E29": to_million(hasil_asf.get("corp_nop_A")),
         "G29": to_million(hasil_asf.get("corp_nop_B")),
         "I29": to_million(hasil_asf.get("corp_nop_C")),
-        "C39": to_million(hasil_asf.get("tier1_capital")),
+        # Row 7 ("1.1.1 Modal inti (Tier 1)") is the correct Tier 1 capital
+        # cell. The previous mapping ("C39") targeted "Liabilitas dan ekuitas
+        # lainnya" instead — a legitimate `=SUM(C41:C44)` subtotal — and
+        # silently clobbered it with 0 on every export.
+        "C7": to_million(hasil_asf.get("tier1_capital")),
 
         # RSF
         "C54": to_million(hasil_rsf.get("kas")),
-        "C55": to_million(hasil_rsf.get("fasbis")),
+        # Row 55 ("1.1.2 penempatan pada Bank Indonesia") reports under the
+        # "< 6 bulan" column (E), not the "Tanpa Jangka Waktu" column (C) —
+        # the previous mapping wrote to C55, leaving E55's #REF! formula
+        # intact and never actually surfacing the FASBIS/Giro BI figure.
+        "E55": to_million(hasil_rsf.get("fasbis")),
         "C57": to_million(hasil_rsf.get("sukbi")),
         "E86": to_million(hasil_rsf.get("interbank")),
         "E93": to_million(hasil_rsf.get("perf_A")),

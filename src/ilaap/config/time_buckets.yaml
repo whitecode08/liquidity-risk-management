@@ -1,0 +1,81 @@
+# 19 time buckets for Survival Period Monitoring (SEOJK No. 26/SEOJK.03/2025).
+# hari_mulai is inclusive, hari_selesai is exclusive. A transaction with
+# `hari_ke_jatuh_tempo == h` lands in the bucket where hari_mulai <= h < hari_selesai.
+# The last bucket (diatas_5thn) has hari_selesai: null, meaning unbounded.
+buckets:
+  - id: overnight
+    label: "Overnight"
+    hari_mulai: 0
+    hari_selesai: 1
+  - id: h2
+    label: "Hari-2"
+    hari_mulai: 1
+    hari_selesai: 2
+  - id: h3
+    label: "Hari-3"
+    hari_mulai: 2
+    hari_selesai: 3
+  - id: h4
+    label: "Hari-4"
+    hari_mulai: 3
+    hari_selesai: 4
+  - id: h5
+    label: "Hari-5"
+    hari_mulai: 4
+    hari_selesai: 5
+  - id: h6
+    label: "Hari-6"
+    hari_mulai: 5
+    hari_selesai: 6
+  - id: h7
+    label: "Hari-7"
+    hari_mulai: 6
+    hari_selesai: 7
+  - id: h7_14
+    label: "7 s.d. 14 hari"
+    hari_mulai: 7
+    hari_selesai: 14
+  - id: h14_1bln
+    label: "> 14 hari s.d. 1 bulan"
+    hari_mulai: 14
+    hari_selesai: 30
+  - id: b1_2bln
+    label: "> 1 s.d. 2 bulan"
+    hari_mulai: 30
+    hari_selesai: 60
+  - id: b2_3bln
+    label: "> 2 s.d. 3 bulan"
+    hari_mulai: 60
+    hari_selesai: 90
+  - id: b3_6bln
+    label: "> 3 s.d. 6 bulan"
+    hari_mulai: 90
+    hari_selesai: 180
+  - id: b6_9bln
+    label: "> 6 s.d. 9 bulan"
+    hari_mulai: 180
+    hari_selesai: 270
+  - id: b9_12bln
+    label: "> 9 s.d. 12 bulan"
+    hari_mulai: 270
+    hari_selesai: 365
+  - id: b12bln_2thn
+    label: "> 1 s.d. 2 tahun"
+    hari_mulai: 365
+    hari_selesai: 730
+  - id: b2_3thn
+    label: "> 2 s.d. 3 tahun"
+    hari_mulai: 730
+    hari_selesai: 1095
+  - id: b3_5thn
+    label: "> 3 s.d. 5 tahun"
+    hari_mulai: 1095
+    hari_selesai: 1825
+  - id: diatas_5thn
+    label: "> 5 tahun"
+    hari_mulai: 1825
+    hari_selesai: null
+  - id: overdue
+    label: "Jatuh tempo terlampaui (data tidak konsisten)"
+    hari_mulai: null
+    hari_selesai: 0
