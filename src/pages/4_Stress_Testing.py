@@ -30,22 +30,22 @@ from ilaap import data_contract  # noqa: E402
 from ilaap import audit as ilaap_audit  # noqa: E402
 from ilaap.available_hqla import available_hqla_calc  # noqa: E402
 import audit_log as al  # noqa: E402
+import pipeline as pl  # noqa: E402
+from assets import ui  # noqa: E402
+from assets import chart_theme as ct  # noqa: E402
+from assets.theme import COLORS  # noqa: E402
 
 # ── Hero ──────────────────────────────────────────────────────────────────────
-st.markdown("""
-<div class="lcr-hero hero-rose">
-  <div class="badge">🌩️ ILAAP — SURVIVAL PERIOD MONITORING</div>
-  <h1>Stress Testing (ILAAP)</h1>
-  <p>Available HQLA &amp; 19-bucket cash-flow ladder per SEOJK No. 26/SEOJK.03/2025 —
-  no LCR 75% inflow cap, official stress scenarios, independent reconciliation.</p>
-</div>
-""", unsafe_allow_html=True)
+ui.hero("Stress Testing (ILAAP)",
+        "Available HQLA &amp; 19-bucket cash-flow ladder per SEOJK No. 26/SEOJK.03/2025 — "
+        "no LCR 75% inflow cap, official stress scenarios, independent reconciliation.",
+        "ILAAP — Survival Period Monitoring", "activity", "rose")
 
 lcr_res = st.session_state.get("lcr_results")
 if not lcr_res:
-    st.warning("⚠️ LCR Results required. Please run the LCR Calculator first — "
+    st.warning("LCR Results required. Please run the LCR Calculator first — "
                "this page reuses its uploaded data (NeracaHarian, Tabungan, Giro, "
-               "Deposito, Pinjaman) to build the transaction ledger.")
+               "Deposito, Pinjaman) to build the transaction ledger.", icon=":material/warning:")
     st.stop()
 
 asof_date_str = lcr_res["asof"]
@@ -55,11 +55,11 @@ dpk_total = (df_tab["jumlahBulanLaporanActive"].sum()
              + df_giro["jumlahBulanLaporanActive"].sum()
              + df_depo["jumlahBulanLaporanActive"].sum())
 
-buckets = sp.load_time_buckets()
-scenarios = sp.load_stress_scenarios()
+buckets = pl.time_buckets()
+scenarios = pl.stress_scenarios()
 
 # ── Parameters ────────────────────────────────────────────────────────────────
-st.markdown('<div class="section-label">Modul 1 — Available HQLA Assumptions</div>', unsafe_allow_html=True)
+ui.section("Modul 1 — Available HQLA Assumptions")
 st.caption(
     "GWM sudah dinetkan di dalam Total HQLA oleh `hqla_calc()` (lihat "
     "`estimate_gwm` di lcr_engine.py) — tidak dikurangi lagi di sini agar "
@@ -80,7 +80,7 @@ with c3:
         help="Mis. fasilitas repo/FTK BI yang sedang ditarik. Default 0 jika tidak ada.",
     )
 
-st.markdown('<div class="section-label">Modul 2 — Survival Period Scenario</div>', unsafe_allow_html=True)
+ui.section("Modul 2 — Survival Period Scenario")
 c4, c5 = st.columns(2)
 with c4:
     scenario_id = st.selectbox(
@@ -113,9 +113,11 @@ if st.session_state.get("ilaap_sig") != sig:
         )
         ledger = data_contract.build_transactions_ledger(df_tab, df_giro, df_depo, df_fin, df_rka, asof_date_str)
         scenario = scenarios[scenario_id]
-        ladder = sp.project_cashflow_ladder(ledger, buckets, scenario, asof_date_str)
+        # Ladder + independent reconciliation (~4s) depend only on ledger,
+        # scenario and as-of date — cached, so moving PLM / BI-liquidity /
+        # target inputs no longer rebuilds them.
+        ladder, recon = pl.ladder_and_recon(ledger, scenario_id, asof_date_str)
         result = sp.determine_survival_period(ladder, available["available_hqla"], target_survival_days, buckets)
-        recon = ilaap_audit.reconcile_ladder(ledger, ladder, buckets, scenario, asof_date_str)
 
         ilaap_audit.log_survival_period_run(
             ladder, scenario_id, result,
@@ -139,7 +141,7 @@ if st.session_state.get("ilaap_sig") != sig:
         }
     except Exception as e:
         al.record_error("ILAAP — Survival Period", f"Calculation failed: {type(e).__name__}: {e}")
-        st.error(f"❌ Calculation error: {e}")
+        st.error(f"Calculation error: {e}", icon=":material/error:")
         st.stop()
 
 cache = st.session_state["ilaap_page_cache"]
@@ -148,54 +150,36 @@ scenario, available, ladder, result, recon = (
 )
 
 # ── KPI cards ─────────────────────────────────────────────────────────────────
-st.markdown(f'<div class="section-label">Hasil · {asof_date_str} · {scenario["label"]}</div>', unsafe_allow_html=True)
+ui.section(f'Hasil · {asof_date_str} · {scenario["label"]}')
 
 compliant = result["memenuhi_target"]
-s_color = "#22C55E" if compliant else "#EF4444"
-s_label = "TARGET TERPENUHI" if compliant else "ADD-ON DIPERLUKAN"
+status = "healthy" if compliant else "critical"
 survival_disp = f'{result["survival_hari"]} hari' if result["survival_hari"] is not None else f'> {buckets[-2]["hari_mulai"]} hari'
+ui.status_panel("Survival Period Status", survival_disp, status,
+                label="TARGET TERPENUHI" if compliant else "ADD-ON DIPERLUKAN",
+                note=f'Target: {target_survival_days} hari &nbsp;·&nbsp; Skenario: {scenario["label"]}')
 
-st.markdown(f"""
-<div class="lcr-gauge-wrap" style="border-color:{s_color}55;">
-  <div class="gauge-title">Survival Period Status</div>
-  <div style="display:flex;align-items:center;gap:1rem;margin-bottom:0.5rem;">
-    <span style="font-size:1.8rem;font-weight:800;color:#fff;">{survival_disp}</span>
-    <span style="background:{s_color}22;border:1px solid {s_color}66;color:{s_color};
-                 border-radius:20px;padding:0.15rem 0.7rem;font-size:0.7rem;font-weight:700;
-                 letter-spacing:0.1em;">{s_label}</span>
-  </div>
-  <div style="font-size:0.78rem;color:var(--text-muted);">Target: {target_survival_days} hari &nbsp;·&nbsp; Skenario: {scenario["label"]}</div>
-</div>""", unsafe_allow_html=True)
-
-
-def _kpi(icon, label, value, c):
-    return (f'<div class="kpi-card {c}"><div class="top-bar"></div>'
-            f'<span class="icon">{icon}</span><div class="value">{value}</div>'
-            f'<div class="kpi-label">{label}</div></div>')
-
-
-st.markdown(
-    f'<div class="kpi-grid">'
-    f'{_kpi("🏦", "Total HQLA", fmt_currency(available["total_hqla"]), "blue")}'
-    f'{_kpi("💧", "Available HQLA (Day 0)", fmt_currency(available["available_hqla"]), "teal")}'
-    f'{_kpi("📉", "PLM Obligation", fmt_currency(available["plm_obligation"]), "amber")}'
-    f'{_kpi("🌊", "Survival Horizon", survival_disp, "green" if compliant else "red")}'
-    f'</div>', unsafe_allow_html=True,
-)
+ui.kpi_grid([
+    ui.kpi_card("shield", "Total HQLA", fmt_currency(available["total_hqla"])),
+    ui.kpi_card("wallet", "Available HQLA (Day 0)", fmt_currency(available["available_hqla"])),
+    ui.kpi_card("layers", "PLM Obligation", fmt_currency(available["plm_obligation"])),
+    ui.kpi_card("hourglass", "Survival Horizon", survival_disp, status),
+])
 
 if result["add_on_required"]:
     st.warning(
-        f"⚠️ Survival period tidak memenuhi target {target_survival_days} hari. "
+        f"Survival period tidak memenuhi target {target_survival_days} hari. "
         f"Shortfall pada bucket target: **{fmt_currency(result['shortfall_pada_target'])}**. "
         f"Perhitungan Pillar 2 add-on (persentase LCR tambahan) **belum diimplementasikan** — "
         f"metodologi konversi shortfall→persentase belum dikonfirmasi ke Divisi Manajemen "
-        f"Risiko & Kepatuhan (lihat `compute_add_on_percent()` di `ilaap/survival_period.py`)."
+        f"Risiko & Kepatuhan (lihat `compute_add_on_percent()` di `ilaap/survival_period.py`).",
+        icon=":material/warning:",
     )
 
 st.divider()
 
 # ── Ladder chart ──────────────────────────────────────────────────────────────
-st.markdown('<div class="section-label">19-Bucket Cash-Flow Ladder</div>', unsafe_allow_html=True)
+ui.section("19-Bucket Cash-Flow Ladder")
 
 label_map = {b["id"]: b.get("label", b["id"]) for b in buckets}
 order = sp.bucket_order(buckets)
@@ -204,24 +188,32 @@ chart_df["Bucket"] = chart_df["bucket_id"].map(label_map)
 chart_df["order"] = chart_df["bucket_id"].apply(lambda b: order.index(b))
 chart_df = chart_df.sort_values("order")
 
-area = alt.Chart(chart_df).mark_area(
-    line={"color": "#22D3EE"},
+_line = COLORS["accent_blue_soft"]
+area = alt.Chart(chart_df, title="Available HQLA after cumulative net outflow").mark_area(
+    line={"color": _line, "strokeWidth": 2},
     color=alt.Gradient(gradient="linear",
-                        stops=[alt.GradientStop(color="#22D3EE", offset=0),
-                               alt.GradientStop(color="rgba(34,211,238,0)", offset=1)],
-                        x1=1, x2=1, y1=1, y2=0),
+                        stops=[alt.GradientStop(color=_line, offset=0),
+                               alt.GradientStop(color="rgba(96,165,250,0)", offset=1)],
+                        x1=1, x2=1, y1=0, y2=1),
+    opacity=0.9,
 ).encode(
     x=alt.X("Bucket:N", sort=chart_df["Bucket"].tolist(), title=None,
-            axis=alt.Axis(labelAngle=-45)),
-    y=alt.Y("available_hqla_kumulatif:Q", title="Available HQLA (IDR)"),
+            # axis shows the label without its parenthetical note; tooltip/table keep it
+            axis=alt.Axis(labelAngle=-40, labelLimit=0, labelFontSize=12,
+                          labelExpr="split(datum.label, ' (')[0]")),
+    y=alt.Y("available_hqla_kumulatif:Q", title="Available HQLA (IDR)",
+            axis=alt.Axis(labelExpr=ct.IDR_SHORT.format(v="datum.value"))),
     tooltip=["Bucket", alt.Tooltip("available_hqla_kumulatif:Q", format=",.0f", title="Available HQLA"),
              alt.Tooltip("arus_keluar_kumulatif:Q", format=",.0f", title="Kumulatif Keluar"),
              alt.Tooltip("arus_masuk_kumulatif:Q", format=",.0f", title="Kumulatif Masuk")],
-).properties(height=320)
-zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#EF4444", strokeDash=[5, 5]).encode(y="y:Q")
-st.altair_chart(area + zero_line, use_container_width=True)
+)
+zero_line = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(
+    color=COLORS["accent_red"], strokeDash=[5, 5], strokeWidth=1.5,
+).encode(y="y:Q")
+ct.render(ct.apply_theme(area + zero_line, height=ct.WIDE_CHART_HEIGHT + 60))  # +60: rotated bucket labels
+st.caption("Dashed red line = zero Available HQLA; the survival period ends where the area crosses it.")
 
-with st.expander("📋 Lihat tabel ladder lengkap (19 bucket)"):
+with st.expander("Lihat tabel ladder lengkap (19 bucket)", icon=":material/table_rows:"):
     display_df = chart_df[["Bucket", "arus_keluar", "arus_masuk", "arus_keluar_kumulatif",
                             "arus_masuk_kumulatif", "net_outflow_kumulatif",
                             "available_hqla_kumulatif"]].copy()
@@ -232,16 +224,10 @@ with st.expander("📋 Lihat tabel ladder lengkap (19 bucket)"):
 st.divider()
 
 # ── Reconciliation ────────────────────────────────────────────────────────────
-st.markdown('<div class="section-label">Rekonsiliasi Independen (Kontrol Audit)</div>', unsafe_allow_html=True)
+ui.section("Rekonsiliasi Independen (Kontrol Audit)")
 all_pass = (recon["Status"] == "PASS").all()
-st.markdown(
-    f'<span style="background:{"#22C55E22" if all_pass else "#EF444422"};'
-    f'border:1px solid {"#22C55E66" if all_pass else "#EF444466"};'
-    f'color:{"#22C55E" if all_pass else "#EF4444"};border-radius:20px;'
-    f'padding:0.2rem 0.9rem;font-size:0.75rem;font-weight:700;letter-spacing:0.08em;">'
-    f'{"✅ ALL BUCKETS PASS" if all_pass else "❌ RECONCILIATION FAILED"}</span>',
-    unsafe_allow_html=True,
-)
+ui.md(ui.pill("ALL BUCKETS PASS" if all_pass else "RECONCILIATION FAILED",
+              "healthy" if all_pass else "critical"))
 st.caption(
     "net_outflow_kumulatif dihitung ulang secara independen dari transaksi mentah "
     "(bukan dari hasil project_cashflow_ladder()) dan dibandingkan per bucket — "
@@ -257,8 +243,5 @@ st.dataframe(
     use_container_width=True, hide_index=True,
 )
 
-st.markdown(
-    '<div class="lcr-footer">© 2025 — ILAAP Survival Period Monitoring &nbsp;·&nbsp; '
-    'SEOJK No. 26/SEOJK.03/2025 &nbsp;·&nbsp; Internal management use only.</div>',
-    unsafe_allow_html=True,
-)
+ui.footer("© 2025 — ILAAP Survival Period Monitoring &nbsp;·&nbsp; "
+          "SEOJK No. 26/SEOJK.03/2025 &nbsp;·&nbsp; Internal management use only.")

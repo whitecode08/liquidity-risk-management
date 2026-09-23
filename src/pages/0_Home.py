@@ -1,54 +1,48 @@
 """Home page — Overview & navigation."""
+import pathlib
+import sys
+
 import streamlit as st
 
-st.markdown("""
-<div class="lcr-hero">
-  <div class="badge">💧 LIQUIDITY RISK MANAGEMENT SYSTEM</div>
-  <h1>Liquidity Risk Management</h1>
-  <p>Regulatory compliance tools for LCR and NSFR &nbsp;·&nbsp; POJK No. 20 Tahun 2025 &nbsp;·&nbsp; Bank BUS &amp; UUS</p>
-</div>
-""", unsafe_allow_html=True)
+_SRC_DIR = pathlib.Path(__file__).resolve().parent.parent
+if str(_SRC_DIR) not in sys.path:
+    sys.path.insert(0, str(_SRC_DIR))
+from assets import ui  # noqa: E402
+from assets.icons import icon  # noqa: E402
 
-st.markdown("""
-<div class="nav-grid">
-  <a class="nav-card" href="/lcr" target="_self">
-    <div class="nav-icon">💧</div>
-    <div class="nav-title">LCR Calculator</div>
-    <div class="nav-desc">Liquidity Coverage Ratio — 30-day stress horizon. Upload source files, auto-calculate HQLA, Cash Outflows &amp; Inflows, export OJK report.</div>
-    <div class="nav-badge">Min. 100% per POJK</div>
-  </a>
-  <a class="nav-card" href="/nsfr" target="_self">
-    <div class="nav-icon">🏦</div>
-    <div class="nav-title">NSFR Calculator</div>
-    <div class="nav-desc">Net Stable Funding Ratio — 1-year structural liquidity. Calculate Available vs Required Stable Funding, export OJK report.</div>
-    <div class="nav-badge">Min. 100% per POJK</div>
-  </a>
-  <a class="nav-card" href="/ai-summary" target="_self">
-    <div class="nav-icon">🤖</div>
-    <div class="nav-title">AI Executive Summary</div>
-    <div class="nav-desc">AI-generated board-level summary of your latest LCR and NSFR results (DeepSeek V4.1 Flash).</div>
-    <div class="nav-badge">Requires LCR / NSFR run</div>
-  </a>
-  <a class="nav-card" href="/stress-testing" target="_self">
-    <div class="nav-icon">🌩️</div>
-    <div class="nav-title">ILAAP Stress Testing</div>
-    <div class="nav-desc">Simulate HQLA haircuts, deposit run-offs and inflow shocks to estimate the survival horizon.</div>
-    <div class="nav-badge">Requires LCR run</div>
-  </a>
-  <a class="nav-card" href="/audit-log" target="_self">
-    <div class="nav-icon">📒</div>
-    <div class="nav-title">Audit Log</div>
-    <div class="nav-desc">Traceability for internal audit — source-file fingerprints, every regulatory weighting applied, the ratio arithmetic, and a reconciliation control. Exports as an audit pack.</div>
-    <div class="nav-badge">Governance &amp; assurance</div>
-  </a>
-</div>
-""", unsafe_allow_html=True)
+ui.hero("Liquidity Risk Management",
+        "Regulatory compliance tools for LCR and NSFR &nbsp;·&nbsp; POJK No. 20 Tahun 2025 &nbsp;·&nbsp; Bank BUS &amp; UUS",
+        "Liquidity Risk Management System", "droplet")
+
+_CARDS = [
+    ("/lcr", "droplet", "LCR Calculator",
+     "Liquidity Coverage Ratio — 30-day stress horizon. Upload source files, auto-calculate HQLA, Cash Outflows &amp; Inflows, export OJK report.",
+     "Min. 100% per POJK"),
+    ("/nsfr", "landmark", "NSFR Calculator",
+     "Net Stable Funding Ratio — 1-year structural liquidity. Calculate Available vs Required Stable Funding, export OJK report.",
+     "Min. 100% per POJK"),
+    ("/ai-summary", "sparkles", "AI Executive Summary",
+     "AI-generated board-level summary of your latest LCR and NSFR results (DeepSeek V4.1 Flash).",
+     "Requires LCR / NSFR run"),
+    ("/stress-testing", "activity", "ILAAP Stress Testing",
+     "Simulate HQLA haircuts, deposit run-offs and inflow shocks to estimate the survival horizon.",
+     "Requires LCR run"),
+    ("/audit-log", "shield-check", "Audit Log",
+     "Traceability for internal audit — source-file fingerprints, every regulatory weighting applied, the ratio arithmetic, and a reconciliation control. Exports as an audit pack.",
+     "Governance &amp; assurance"),
+]
+ui.md('<div class="nav-grid">' + "".join(
+    f'<a class="nav-card" href="{href}" target="_self"><div class="nav-icon">{icon(ic, 20)}</div>'
+    f'<div class="nav-title">{title}</div><div class="nav-desc">{desc}</div>'
+    f'<div class="nav-foot"><span class="nav-badge">{badge}</span>{icon("arrow-right", 16)}</div></a>'
+    for href, ic, title, desc, badge in _CARDS
+) + '</div>')
 
 st.divider()
 
-st.markdown("""
+ui.md(f"""
 <div class="ref-box">
-  <div class="ref-title">📋 Regulatory Framework — POJK No. 20 Tahun 2025</div>
+  <div class="ref-title">{icon("book-open", 18)} Regulatory Framework — POJK No. 20 Tahun 2025</div>
   <table class="ref-table">
     <thead><tr><th>Ratio</th><th>Full Name</th><th>Horizon</th><th>Minimum</th><th>Applicable to</th></tr></thead>
     <tbody>
@@ -57,12 +51,13 @@ st.markdown("""
     </tbody>
   </table>
 </div>
-""", unsafe_allow_html=True)
+""")
 
+st.write("")
 col1, col2 = st.columns(2)
 with col1:
-    st.markdown("""
-<div class="lcr-card">
+    ui.md("""
+<div class="panel">
   <div class="section-label">LCR — Required Source Files</div>
   <table class="ref-table">
     <thead><tr><th>File</th><th>Description</th></tr></thead>
@@ -77,10 +72,10 @@ with col1:
     </tbody>
   </table>
 </div>
-""", unsafe_allow_html=True)
+""")
 with col2:
-    st.markdown("""
-<div class="lcr-card">
+    ui.md("""
+<div class="panel">
   <div class="section-label">NSFR — Required Source Files</div>
   <table class="ref-table">
     <thead><tr><th>File</th><th>Description</th></tr></thead>
@@ -95,11 +90,6 @@ with col2:
     </tbody>
   </table>
 </div>
-""", unsafe_allow_html=True)
+""")
 
-st.markdown(
-    '<div class="lcr-footer">'
-    '© 2025 — Liquidity Risk Management System &nbsp;·&nbsp; Powered by Streamlit &nbsp;·&nbsp; '
-    'POJK No. 20 Tahun 2025</div>',
-    unsafe_allow_html=True,
-)
+ui.footer("© 2025 — Liquidity Risk Management System &nbsp;·&nbsp; Powered by Streamlit &nbsp;·&nbsp; POJK No. 20 Tahun 2025")

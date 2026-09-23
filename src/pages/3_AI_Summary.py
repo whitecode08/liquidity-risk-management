@@ -19,14 +19,12 @@ from ai_summary import (  # noqa: E402
     nsfr_summary,
 )
 import audit_log as al  # noqa: E402
+from assets import ui  # noqa: E402
+from assets.theme import ratio_status  # noqa: E402
 
-st.markdown("""
-<div class="lcr-hero hero-violet">
-  <div class="badge">🤖 AI-POWERED ANALYSIS</div>
-  <h1>Executive Summary</h1>
-  <p>Board-level liquidity commentary generated from your latest LCR and NSFR runs, via the OpenModel gateway.</p>
-</div>
-""", unsafe_allow_html=True)
+ui.hero("Executive Summary",
+        "Board-level liquidity commentary generated from your latest LCR and NSFR runs, via the OpenModel gateway.",
+        "AI-Powered Analysis", "sparkles", "violet")
 
 lcr_res = st.session_state.get("lcr_results")
 nsfr_res = st.session_state.get("nsfr_results")
@@ -40,7 +38,7 @@ def _models():
 
 # ── Sidebar: engine configuration ───────────────────────────────────────────
 with st.sidebar:
-    st.markdown("## 🤖 AI Engine")
+    st.markdown("## AI Engine")
     ready, msg = check_config()
 
     catalogue = _models()
@@ -56,15 +54,11 @@ with st.sidebar:
     )
     st.caption(f"Endpoint: `{get_base_url()}/v1/messages`")
     if ready:
-        st.success("API key loaded", icon="🔑")
+        st.success("API key loaded", icon=":material/key:")
     else:
-        st.error("API key not configured", icon="🔑")
+        st.error("API key not configured", icon=":material/key_off:")
     st.markdown("---")
-    st.markdown(
-        "<p style='font-size:0.68rem;color:#94A3B8;text-align:center;font-weight:600;'>"
-        "AI Executive Summary v2.0<br/>Powered by openmodel.ai</p>",
-        unsafe_allow_html=True,
-    )
+    st.caption("AI Executive Summary v2.0 · Powered by openmodel.ai")
 
 # ── Configuration guard ─────────────────────────────────────────────────────
 if not ready:
@@ -91,69 +85,65 @@ OpenModel speaks the **Anthropic Messages protocol**, so this page talks to
     st.stop()
 
 # ── Analysis context ────────────────────────────────────────────────────────
-st.markdown('<div class="section-label">Analysis Context</div>', unsafe_allow_html=True)
+ui.section("Analysis Context")
 
 col1, col2, col3 = st.columns(3)
 with col1:
     if lcr_res:
-        st.success(f"✅ LCR results available — as of {lcr_res['asof']}")
+        st.success(f"LCR results available — as of {lcr_res['asof']}", icon=":material/check_circle:")
     else:
-        st.warning("⚠️ No LCR results. Run the LCR Calculator first.")
+        st.warning("No LCR results. Run the LCR Calculator first.", icon=":material/warning:")
 with col2:
     if nsfr_res:
-        st.success(f"✅ NSFR results available — as of {nsfr_res['asof']}")
+        st.success(f"NSFR results available — as of {nsfr_res['asof']}", icon=":material/check_circle:")
     else:
-        st.warning("⚠️ No NSFR results. Run the NSFR Calculator first.")
+        st.warning("No NSFR results. Run the NSFR Calculator first.", icon=":material/warning:")
 with col3:
     if ilaap_res:
-        st.success(f"✅ ILAAP Survival Period available — {ilaap_res['scenario_label']}")
+        st.success(f"ILAAP Survival Period available — {ilaap_res['scenario_label']}", icon=":material/check_circle:")
     else:
-        st.warning("⚠️ No ILAAP results. Run Stress Testing (ILAAP) first — optional.")
+        st.warning("No ILAAP results. Run Stress Testing (ILAAP) first — optional.", icon=":material/warning:")
 
 if not (lcr_res or nsfr_res):
     st.info("No analysis data found in the current session. Go to the LCR or NSFR page to run an analysis.")
     st.stop()
 
 # Headline figures, so the analyst sees exactly what the model is being fed.
-def _kpi(icon, label, value, tone):
-    return (f'<div class="kpi-card {tone}"><div class="top-bar"></div>'
-            f'<span class="icon">{icon}</span><div class="value">{value}</div>'
-            f'<div class="kpi-label">{label}</div></div>')
-
-
 tiles = []
 if lcr_res:
     lcr_val = lcr_res["lcr"].get("LCR", 0)
-    tiles.append(_kpi("💧", "LCR Ratio", f"{lcr_val:.2f}%", "green" if lcr_val >= 100 else "red"))
-    tiles.append(_kpi("🏦", "Total HQLA", f"{lcr_res['lcr']['Total HQLA']:,.0f}", "blue"))
+    tiles.append(ui.kpi_card("droplet", "LCR Ratio", f"{lcr_val:.2f}%", ratio_status(lcr_val)))
+    tiles.append(ui.kpi_card("shield", "Total HQLA", f"{lcr_res['lcr']['Total HQLA']:,.0f}"))
 if nsfr_res:
     nsfr_val = nsfr_res["nsfr"].get("NSFR", 0)
-    tiles.append(_kpi("🏛️", "NSFR Ratio", f"{nsfr_val:.2f}%", "green" if nsfr_val >= 100 else "red"))
-    tiles.append(_kpi("📦", "Total ASF", f"{nsfr_res['nsfr']['Total ASF']:,.0f}", "teal"))
+    tiles.append(ui.kpi_card("landmark", "NSFR Ratio", f"{nsfr_val:.2f}%", ratio_status(nsfr_val)))
+    tiles.append(ui.kpi_card("trending-up", "Total ASF", f"{nsfr_res['nsfr']['Total ASF']:,.0f}"))
 
     rsf = nsfr_res["rsf"]
     performing = rsf.get("perf_A", 0) + rsf.get("perf_B", 0) + rsf.get("perf_C", 0)
     npf = rsf.get("npf", 0)
     npf_ratio = (npf / (performing + npf) * 100) if (performing + npf) else 0.0
-    tiles.append(_kpi("⚠️", "NPF Ratio", f"{npf_ratio:.2f}%", "amber" if npf_ratio < 5 else "red"))
+    tiles.append(ui.kpi_card("triangle-alert", "NPF Ratio", f"{npf_ratio:.2f}%",
+                             "warning" if npf_ratio < 5 else "critical"))
 
     ldr_row = nsfr_res["dfs"]["nrc_rangkuman"]
     ldr_match = ldr_row.loc[ldr_row["KETERANGAN"] == "LDR", "REALISASI"]
     if len(ldr_match):
         ldr_pct = float(ldr_match.iloc[0]) * 100
-        tiles.append(_kpi("📊", "LDR", f"{ldr_pct:.1f}%", "navy"))
+        tiles.append(ui.kpi_card("scale", "LDR", f"{ldr_pct:.1f}%"))
 if ilaap_res:
     result = ilaap_res["result"]
     survival_disp = f'{result.get("survival_hari")}d' if result.get("survival_hari") is not None else ">5y"
-    tiles.append(_kpi("🌊", "Survival Horizon", survival_disp,
-                       "green" if result["memenuhi_target"] else "red"))
-    tiles.append(_kpi("🚨", "ILAAP Add-On", "Required" if result["add_on_required"] else "Not required",
-                       "red" if result["add_on_required"] else "green"))
-st.markdown(f'<div class="kpi-grid">{"".join(tiles)}</div>', unsafe_allow_html=True)
+    tiles.append(ui.kpi_card("hourglass", "Survival Horizon", survival_disp,
+                             "healthy" if result["memenuhi_target"] else "critical"))
+    tiles.append(ui.kpi_card("triangle-alert", "ILAAP Add-On",
+                             "Required" if result["add_on_required"] else "Not required",
+                             "critical" if result["add_on_required"] else "healthy"))
+ui.kpi_grid(tiles)
 st.caption("Scorecard ini adalah persis konteks numerik yang dikirim ke model AI — bukan ringkasan terpisah.")
 
 # ── Report scope ────────────────────────────────────────────────────────────
-st.markdown('<div class="section-label">Report Scope</div>', unsafe_allow_html=True)
+ui.section("Report Scope")
 
 options = ["Combined — Board / ALCO executive summary"]
 if lcr_res:
@@ -167,7 +157,8 @@ scope = st.radio("Scope", options, horizontal=True, label_visibility="collapsed"
 if scope.startswith("Combined") and ilaap_res:
     st.caption("ILAAP Survival Period will be included in the combined summary automatically.")
 
-if st.button("✨ Generate Executive Summary", type="primary", use_container_width=True):
+if st.button("Generate Executive Summary", type="primary", icon=":material/auto_awesome:",
+             use_container_width=True):
     with st.spinner(f"Analyzing liquidity position with `{model}`…"):
         if scope.startswith("LCR"):
             text, err = lcr_summary(
@@ -198,7 +189,7 @@ if st.button("✨ Generate Executive Summary", type="primary", use_container_wid
 summary_text = st.session_state.get("executive_summary_text")
 if summary_text:
     meta = st.session_state.get("executive_summary_meta", {})
-    st.markdown('<div class="section-label">AI Generated Report</div>', unsafe_allow_html=True)
+    ui.section("AI Generated Report")
     st.caption(
         f"Model `{meta.get('model', model)}` · {meta.get('scope', '')} · "
         f"generated {meta.get('generated', '')}"
@@ -207,7 +198,7 @@ if summary_text:
         st.markdown(summary_text)
 
     st.download_button(
-        "⬇️ Download as Markdown",
+        "Download as Markdown", icon=":material/download:",
         data=(
             f"# Liquidity Executive Summary\n\n"
             f"_Model: {meta.get('model', model)} · {meta.get('scope', '')} · "
@@ -218,8 +209,5 @@ if summary_text:
         use_container_width=True,
     )
 
-st.markdown(
-    '<div class="lcr-footer">© 2025 — Liquidity Risk Management &nbsp;·&nbsp; '
-    'AI summaries must be reviewed by risk professionals before use.</div>',
-    unsafe_allow_html=True,
-)
+ui.footer("© 2025 — Liquidity Risk Management &nbsp;·&nbsp; "
+          "AI summaries must be reviewed by risk professionals before use.")

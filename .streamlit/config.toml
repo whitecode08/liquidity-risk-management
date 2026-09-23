@@ -1,10 +1,23 @@
 [theme]
+# Keep in sync with src/assets/theme.py (COLORS).
 base = "dark"
 primaryColor = "#3B82F6"
-backgroundColor = "#0B1120"
-secondaryBackgroundColor = "#111C33"
-textColor = "#E2E8F0"
-font = "sans serif"
+backgroundColor = "#0B0F19"
+secondaryBackgroundColor = "#111827"
+textColor = "#F3F4F6"
+borderColor = "#1F2937"
+# Inter is self-hosted (src/static/fonts, SIL OFL) — no internet needed.
+font = "Inter, sans-serif"
+
+[[theme.fontFaces]]
+family = "Inter"
+url = "app/static/fonts/Inter-Variable-latin.woff2"
+weight = "100 900"
+style = "normal"
+
+[server]
+# Serves src/static/ at app/static/ (used for the local Inter font).
+enableStaticServing = true
 
 [client]
 toolbarMode = "minimal"
