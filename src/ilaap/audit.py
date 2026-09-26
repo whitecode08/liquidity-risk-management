@@ -24,7 +24,7 @@ if str(_SRC_DIR) not in sys.path:
 
 import audit_log as al  # noqa: E402 — reuse the existing session log store
 from ilaap.survival_period import (  # noqa: E402
-    assign_bucket, distribute_no_tenor, bucket_order, get_rate_for_row,
+    assign_buckets, distribute_no_tenor, bucket_order, get_rate_for_row,
 )
 
 
@@ -77,7 +77,7 @@ def reconcile_ladder(transactions_df: pd.DataFrame, ladder_df: pd.DataFrame,
     with_tenor = df[df["tanggal_jatuh_tempo_kontraktual"].notna()].copy()
     without_tenor = df[df["tanggal_jatuh_tempo_kontraktual"].isna()].copy()
     with_tenor["hari_ke_jatuh_tempo"] = (with_tenor["tanggal_jatuh_tempo_kontraktual"] - asof).dt.days
-    with_tenor["bucket_id"] = with_tenor["hari_ke_jatuh_tempo"].apply(lambda h: assign_bucket(h, buckets))
+    with_tenor["bucket_id"] = assign_buckets(with_tenor["hari_ke_jatuh_tempo"], buckets)
     with_tenor["nilai_bucket"] = with_tenor["nilai_dasar"]
     without_tenor_expanded = distribute_no_tenor(without_tenor, scenario, buckets)
 
@@ -86,11 +86,18 @@ def reconcile_ladder(transactions_df: pd.DataFrame, ladder_df: pd.DataFrame,
     # Independent aggregation path: sum weighted value per (bucket, arah) via
     # a plain dict accumulation instead of groupby().unstack(), so a pivoting
     # bug in the main module's implementation wouldn't be replicated here.
+    # Iterates plain arrays rather than iterrows() — same accumulation, without
+    # building a Series object per row.
+    rate_memo: dict[str, float] = {}
     totals: dict[tuple[str, str], float] = {}
-    for _, row in combined.iterrows():
-        rate = get_rate_for_row(row["kategori_arus"])
-        key = (row["bucket_id"], row["arah"])
-        totals[key] = totals.get(key, 0.0) + row["nilai_bucket"] * rate
+    for kategori, bucket_id, arah, nilai in zip(
+            combined["kategori_arus"].to_numpy(), combined["bucket_id"].to_numpy(),
+            combined["arah"].to_numpy(), combined["nilai_bucket"].to_numpy()):
+        rate = rate_memo.get(kategori)
+        if rate is None:
+            rate = rate_memo[kategori] = get_rate_for_row(kategori)
+        key = (bucket_id, arah)
+        totals[key] = totals.get(key, 0.0) + nilai * rate
 
     order = bucket_order(buckets)
     rows = []

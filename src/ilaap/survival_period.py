@@ -27,7 +27,10 @@ _SRC_DIR = pathlib.Path(__file__).resolve().parent.parent
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-from lcr_engine import get_runoff_rate, get_inflow_rate, get_additional_outflow_rate  # noqa: E402
+from lcr_engine import (  # noqa: E402
+    get_runoff_rate, get_inflow_rate, get_additional_outflow_rate,
+    RUNOFF_DEPOSITO_JATUH_TEMPO,
+)
 
 _CONFIG_DIR = pathlib.Path(__file__).resolve().parent / "config"
 
@@ -71,6 +74,29 @@ def assign_bucket(hari: float, buckets: list[dict]) -> str:
     raise ValueError(f"Hari {hari} tidak masuk bucket manapun — cek data jatuh tempo")
 
 
+def assign_buckets(hari: pd.Series, buckets: list[dict]) -> pd.Series:
+    """Vectorised assign_bucket() over a whole Series — same rules, same errors.
+
+    The ladder used to call assign_bucket() once per row via .apply(), which
+    was a measurable share of the Stress Testing page's latency.
+    """
+    if hari.isna().any():
+        raise ValueError("assign_buckets() received NaN — on-demand rows must go "
+                          "through distribute_no_tenor() first, not assign_buckets()")
+    result = pd.Series(pd.NA, index=hari.index, dtype=object)
+    result[hari < 0] = "overdue"
+    for b in buckets:
+        if b["id"] == "overdue":
+            continue
+        lo, hi = b["hari_mulai"], b["hari_selesai"]
+        mask = (hari >= lo) if hi is None else ((hari >= lo) & (hari < hi))
+        result[mask & result.isna()] = b["id"]
+    if result.isna().any():
+        bad = hari[result.isna()].iloc[0]
+        raise ValueError(f"Hari {bad} tidak masuk bucket manapun — cek data jatuh tempo")
+    return result
+
+
 def bucket_order(buckets: list[dict]) -> list[str]:
     """Ordered bucket ids, 'overdue' first (already-due), then ascending tenor."""
     regular = [b["id"] for b in buckets if b["id"] != "overdue"]
@@ -101,10 +127,16 @@ _RATE_MAP = {
     "korporasi_op_nonlps":    lambda: get_runoff_rate("korporasi", operasional=True, dijamin_lps=False),
     "korporasi_nonop_lps":    lambda: get_runoff_rate("korporasi", operasional=False, dijamin_lps=True),
     "korporasi_nonop_nonlps": lambda: get_runoff_rate("korporasi", operasional=False, dijamin_lps=False),
+    "sektor_publik_op_lps":       lambda: get_runoff_rate("sektor_publik", operasional=True, dijamin_lps=True),
+    "sektor_publik_op_nonlps":    lambda: get_runoff_rate("sektor_publik", operasional=True, dijamin_lps=False),
+    "sektor_publik_nonop_lps":    lambda: get_runoff_rate("sektor_publik", operasional=False, dijamin_lps=True),
+    "sektor_publik_nonop_nonlps": lambda: get_runoff_rate("sektor_publik", operasional=False, dijamin_lps=False),
+    "bank":                       lambda: get_runoff_rate("bank"),
+    "deposito_jatuh_tempo":       lambda: RUNOFF_DEPOSITO_JATUH_TEMPO,
     "outflow_undrawn_commitment": lambda: get_additional_outflow_rate("undrawn_commitment"),
     "outflow_guarantee":          lambda: get_additional_outflow_rate("guarantee"),
     "inflow_performing":     lambda: get_inflow_rate("counterparty_performing"),
-    "inflow_non_performing": lambda: 0.0,  # conservative: NPF is not a reliable cash inflow
+    "inflow_non_performing": lambda: 0.0,  # conservative: NPL is not a reliable cash inflow
 }
 
 # Segment used to test whether a benchmark scenario's segmen_terdampak filter
@@ -114,6 +146,9 @@ _SEGMENT_OF_KATEGORI = {
     "umk_stabil": "umk", "umk_tidak_stabil": "umk",
     "korporasi_op_lps": "korporasi", "korporasi_op_nonlps": "korporasi",
     "korporasi_nonop_lps": "korporasi", "korporasi_nonop_nonlps": "korporasi",
+    "sektor_publik_op_lps": "sektor_publik", "sektor_publik_op_nonlps": "sektor_publik",
+    "sektor_publik_nonop_lps": "sektor_publik", "sektor_publik_nonop_nonlps": "sektor_publik",
+    "bank": "bank",
 }
 
 
@@ -122,6 +157,13 @@ def get_rate_for_row(kategori_arus: str) -> float:
         return _RATE_MAP[kategori_arus]()
     except KeyError:
         raise ValueError(f"Unknown kategori_arus: {kategori_arus!r}")
+
+
+def rates_for(kategori_arus: pd.Series) -> pd.Series:
+    """get_rate_for_row() over a Series, looked up once per distinct category
+    rather than once per row. Unknown categories still raise ValueError."""
+    lookup = {k: get_rate_for_row(k) for k in kategori_arus.unique()}
+    return kategori_arus.map(lookup).astype(float)
 
 
 # ── No-tenor (on-demand) distribution ───────────────────────────────────────
@@ -156,33 +198,47 @@ def distribute_no_tenor(without_tenor: pd.DataFrame, scenario: dict,
         return without_tenor.assign(bucket_id=pd.Series(dtype=object), nilai_bucket=pd.Series(dtype=float))
 
     mode = scenario["no_tenor_distribution"]
+    if mode not in ("hari_pertama", "satu_kali_h1_sampai_h30"):
+        raise ValueError(f"Unknown no_tenor_distribution mode: {mode!r}")
     segmen_terdampak = scenario.get("segmen_terdampak")
-    rows = []
-    for _, row in without_tenor.iterrows():
-        if row["sumber"] == "off_balance_guarantee":
-            shares = {"overnight": 1.0}
-        elif row["sumber"] == "off_balance_undrawn":
-            shares = _day_weighted_shares(buckets, 0, 30)
-        elif mode == "hari_pertama":
-            shares = {"overnight": 1.0}
-        elif mode == "satu_kali_h1_sampai_h30":
-            row_segmen = _SEGMENT_OF_KATEGORI.get(row["kategori_arus"])
-            if segmen_terdampak is not None and row_segmen not in segmen_terdampak:
-                # This benchmark scenario isolates specific segments — funding
-                # from segments not under test is assumed to stay in place
-                # (not stressed) for this run, so it contributes no outflow.
-                continue
-            shares = _day_weighted_shares(buckets, 1, 30)
-        else:
-            raise ValueError(f"Unknown no_tenor_distribution mode: {mode!r}")
 
+    # Every row falls into one of only a handful of distribution rules, so the
+    # rows are grouped by rule and each group is expanded across its buckets in
+    # one vectorised step. (The previous per-row iterrows()/row.copy() loop
+    # produced the same rows but dominated the Stress Testing page's latency.)
+    sumber = without_tenor["sumber"]
+    is_guarantee = sumber.eq("off_balance_guarantee")
+    is_undrawn = sumber.eq("off_balance_undrawn")
+    funding = ~is_guarantee & ~is_undrawn
+
+    groups = [
+        (is_guarantee, {"overnight": 1.0}),
+        (is_undrawn, _day_weighted_shares(buckets, 0, 30)),
+    ]
+    if mode == "hari_pertama":
+        groups.append((funding, {"overnight": 1.0}))
+    else:
+        in_scope = funding
+        if segmen_terdampak is not None:
+            # This benchmark scenario isolates specific segments — funding
+            # from segments not under test is assumed to stay in place
+            # (not stressed) for this run, so it contributes no outflow.
+            row_segmen = without_tenor["kategori_arus"].map(_SEGMENT_OF_KATEGORI)
+            in_scope = funding & row_segmen.isin(segmen_terdampak)
+        groups.append((in_scope, _day_weighted_shares(buckets, 1, 30)))
+
+    parts = []
+    for mask, shares in groups:
+        subset = without_tenor[mask]
+        if subset.empty:
+            continue
         for bucket_id, frac in shares.items():
-            new_row = row.copy()
-            new_row["bucket_id"] = bucket_id
-            new_row["nilai_bucket"] = row["nilai_dasar"] * frac
-            rows.append(new_row)
-
-    return pd.DataFrame(rows)
+            parts.append(subset.assign(bucket_id=bucket_id,
+                                       nilai_bucket=subset["nilai_dasar"] * frac))
+    if not parts:
+        return without_tenor.iloc[0:0].assign(bucket_id=pd.Series(dtype=object),
+                                               nilai_bucket=pd.Series(dtype=float))
+    return pd.concat(parts, ignore_index=True)
 
 
 # ── Cash-flow ladder ─────────────────────────────────────────────────────────
@@ -204,13 +260,13 @@ def project_cashflow_ladder(transactions_df: pd.DataFrame, buckets: list[dict],
     without_tenor = df[df["tanggal_jatuh_tempo_kontraktual"].isna()].copy()
 
     with_tenor["hari_ke_jatuh_tempo"] = (with_tenor["tanggal_jatuh_tempo_kontraktual"] - asof).dt.days
-    with_tenor["bucket_id"] = with_tenor["hari_ke_jatuh_tempo"].apply(lambda h: assign_bucket(h, buckets))
+    with_tenor["bucket_id"] = assign_buckets(with_tenor["hari_ke_jatuh_tempo"], buckets)
     with_tenor["nilai_bucket"] = with_tenor["nilai_dasar"]
 
     without_tenor_expanded = distribute_no_tenor(without_tenor, scenario, buckets)
 
     combined = pd.concat([with_tenor, without_tenor_expanded], ignore_index=True, sort=False)
-    combined["rate"] = combined["kategori_arus"].apply(get_rate_for_row)
+    combined["rate"] = rates_for(combined["kategori_arus"])
     combined["nilai_terbobot"] = combined["nilai_bucket"] * combined["rate"]
 
     order = bucket_order(buckets)

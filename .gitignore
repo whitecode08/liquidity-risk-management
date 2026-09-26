@@ -62,6 +62,3 @@ logs/
 .claude/
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
-
-# ── Scratch / ad-hoc debug scripts ──────────────────────────
-scratch/

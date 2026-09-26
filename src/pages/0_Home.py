@@ -11,7 +11,7 @@ from assets import ui  # noqa: E402
 from assets.icons import icon  # noqa: E402
 
 ui.hero("Liquidity Risk Management",
-        "Regulatory compliance tools for LCR and NSFR &nbsp;·&nbsp; POJK No. 20 Tahun 2025 &nbsp;·&nbsp; Bank BUS &amp; UUS",
+        "Regulatory compliance tools for LCR and NSFR &nbsp;·&nbsp; POJK 42/2015 jo. 19/2024 (LCR) &amp; POJK 50/2017 jo. 20/2024 (NSFR) &nbsp;·&nbsp; Bank Umum Konvensional / BPD",
         "Liquidity Risk Management System", "droplet")
 
 _CARDS = [
@@ -42,12 +42,12 @@ st.divider()
 
 ui.md(f"""
 <div class="ref-box">
-  <div class="ref-title">{icon("book-open", 18)} Regulatory Framework — POJK No. 20 Tahun 2025</div>
+  <div class="ref-title">{icon("book-open", 18)} Regulatory Framework — LCR &amp; NSFR (Bank Umum Konvensional)</div>
   <table class="ref-table">
     <thead><tr><th>Ratio</th><th>Full Name</th><th>Horizon</th><th>Minimum</th><th>Applicable to</th></tr></thead>
     <tbody>
-      <tr><td><strong>LCR</strong></td><td>Liquidity Coverage Ratio / Rasio Kecukupan Likuiditas</td><td>30 days</td><td>100%</td><td>BUS &amp; UUS</td></tr>
-      <tr><td><strong>NSFR</strong></td><td>Net Stable Funding Ratio / Rasio Pendanaan Stabil Bersih</td><td>1 year</td><td>100%</td><td>BUS &amp; UUS</td></tr>
+      <tr><td><strong>LCR</strong></td><td>Liquidity Coverage Ratio / Rasio Kecukupan Likuiditas</td><td>30 days</td><td>100%</td><td>Bank Umum Konvensional / BPD</td></tr>
+      <tr><td><strong>NSFR</strong></td><td>Net Stable Funding Ratio / Rasio Pendanaan Stabil Bersih</td><td>1 year</td><td>100%</td><td>Bank Umum Konvensional / BPD</td></tr>
     </tbody>
   </table>
 </div>
@@ -63,7 +63,7 @@ with col1:
     <thead><tr><th>File</th><th>Description</th></tr></thead>
     <tbody>
       <tr><td><code>NeracaHarian</code></td><td>Daily Balance Sheet (ASET, RANGKUMAN, RKA)</td></tr>
-      <tr><td><code>PenempatanBI</code></td><td>BI Placement (FASBIS, Giro BI)</td></tr>
+      <tr><td><code>PenempatanBI</code></td><td>BI Placement (Deposit Facility, Giro BI)</td></tr>
       <tr><td><code>SBI</code></td><td>Sertifikat Bank Indonesia instrument data</td></tr>
       <tr><td><code>Tabungan</code></td><td>Savings accounts</td></tr>
       <tr><td><code>Giro</code></td><td>Current accounts</td></tr>
@@ -92,4 +92,4 @@ with col2:
 </div>
 """)
 
-ui.footer("© 2025 — Liquidity Risk Management System &nbsp;·&nbsp; Powered by Streamlit &nbsp;·&nbsp; POJK No. 20 Tahun 2025")
+ui.footer("© 2025 — Liquidity Risk Management System &nbsp;·&nbsp; Powered by Streamlit &nbsp;·&nbsp; POJK 42/2015 jo. 19/2024 (LCR) &amp; POJK 50/2017 jo. 20/2024 (NSFR)")

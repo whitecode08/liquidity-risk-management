@@ -7,7 +7,7 @@ Records, for every session, *how* a reported LCR / NSFR figure was produced:
   · which source file was used, with its SHA-256 fingerprint and size
   · which parameters were applied (reporting date, stress assumptions)
   · every weighting step: base amount × regulatory factor = weighted amount,
-    with the POJK No. 20/2025 rule that sets the factor
+    with the POJK rule that sets the factor
   · the final ratio arithmetic
   · every export and every AI summary generated from the results
 
@@ -33,11 +33,19 @@ import uuid
 import pandas as pd
 import streamlit as st
 
+# The factors that are still placeholders (Entitas Sektor Publik run-off, RSF on
+# encumbered securities) are referenced rather than copied, so the audit trail
+# can never disagree with what the engines actually applied.
+import lcr_engine
+import nsfr_engine
+
 _LOG_KEY = "audit_log_entries"
 _RUN_KEY = "audit_run_id"
 _START_KEY = "audit_run_started"
 
-REG = "POJK No. 20 Tahun 2025"
+# BPD / bank umum konvensional. (Was POJK No. 20 Tahun 2025, which covers
+# bank syariah — BUS/UUS — only.)
+REG = "POJK 42/2015 jo. 19/2024 (LCR) · POJK 50/2017 jo. 20/2024 (NSFR)"
 
 
 # ─────────────────────────────── session store ──────────────────────────────
@@ -148,7 +156,7 @@ def record_error(module: str, message: str) -> None:
 LCR_HQLA_SPEC = [
     ("HQLA", "Cash & cash equivalents", "Cash & Cash Equivalents", 1.00,
      "Level 1 asset — no haircut"),
-    ("HQLA", "Placement at Bank Indonesia (SBI + Giro BI net of GWM + FASBIS)",
+    ("HQLA", "Placement at Bank Indonesia (SBI + Giro BI net of GWM + Deposit Facility)",
      "Placement at Central Bank", 1.00, "Level 1 asset — no haircut"),
 ]
 
@@ -169,8 +177,29 @@ LCR_OUTFLOW_SPEC = [
      "Corp Non-Op — LPS Covered (20%)", "Non-operational deposit, insured 20%"),
     ("Outflow — Corporate", "Non-operational, not LPS covered", "Corp Non-Op — Not LPS Covered", 0.40,
      "Corp Non-Op — Not LPS Covered (40%)", "Non-operational deposit, uninsured 40%"),
-    ("Outflow — Additional", "Undrawn financing commitments", "Undrawn Financing Commitment", 0.10,
-     "Undrawn Financing Commitment (10%)", "Committed undrawn facility 10%"),
+    ("Outflow — Retail", "Retail deposits, matured (payable now)", "Retail Matured Deposits", 1.00,
+     "Outflow — Retail Matured (100%)", "Contractually matured — full run-off"),
+    ("Outflow — SME", "SME (UMK) deposits, matured (payable now)", "SME Matured Deposits", 1.00,
+     "Outflow — SME Matured (100%)", "Contractually matured — full run-off"),
+    ("Outflow — Corporate", "Corporate deposits, matured (payable now)", "Corp Matured Deposits", 1.00,
+     "Corp Matured Deposits (100%)", "Contractually matured — full run-off"),
+    # Entitas Sektor Publik factors are PLACEHOLDERS pending confirmation —
+    # see the RUNOFF_PSE_* constants in src/lcr_engine.py.
+    ("Outflow — Public Sector", "Operational, LPS covered", "PSE Operational — LPS Covered",
+     lcr_engine.RUNOFF_PSE_OP_LPS, None, "Entitas Sektor Publik — PERLU KONFIRMASI"),
+    ("Outflow — Public Sector", "Operational, not LPS covered", "PSE Operational — Not LPS Covered",
+     lcr_engine.RUNOFF_PSE_OP_NONLPS, None, "Entitas Sektor Publik — PERLU KONFIRMASI"),
+    ("Outflow — Public Sector", "Non-operational, LPS covered", "PSE Non-Op — LPS Covered",
+     lcr_engine.RUNOFF_PSE_NONOP_LPS, None, "Entitas Sektor Publik — PERLU KONFIRMASI"),
+    ("Outflow — Public Sector", "Non-operational, not LPS covered", "PSE Non-Op — Not LPS Covered",
+     lcr_engine.RUNOFF_PSE_NONOP_NONLPS, None, "Entitas Sektor Publik — PERLU KONFIRMASI"),
+    ("Outflow — Public Sector", "Deposits matured (payable now)", "PSE Matured Deposits",
+     1.00, None, "Contractually matured — full run-off"),
+    ("Outflow — Bank/FI", "Funding from banks & financial institutions", "Bank/FI Funding",
+     lcr_engine.RUNOFF_BANK, "Total Outflow Pendanaan Lembaga Keuangan",
+     "Financial-institution funding — 100% run-off"),
+    ("Outflow — Additional", "Undrawn credit commitments", "Undrawn Credit Commitment", 0.10,
+     "Undrawn Credit Commitment (10%)", "Committed undrawn facility 10%"),
     ("Outflow — Additional", "Guarantees issued (contingent)", "Guarantee Contingency", 0.05,
      "Guarantee Contingency (5%)", "Contingent guarantee 5%"),
 ]
@@ -204,19 +233,31 @@ NSFR_ASF_SPEC = [
     ("ASF — Corporate", "Non-operational time deposits <6m", "corp_nop_A", 0.50),
     ("ASF — Corporate", "Non-operational time deposits 6m–1yr", "corp_nop_B", 0.50),
     ("ASF — Corporate", "Non-operational time deposits ≥1yr", "corp_nop_C", 1.00),
+    # Entitas Sektor Publik (Pemda/BUMD/BLUD) shares the corporate ASF factors
+    # and is already included in the corp_* figures above; this line is
+    # informational, hence a 0% factor — counting it again would double it.
+    ("ASF — Public Sector", "Pemda/BUMD/BLUD funding (included in Corporate above)",
+     "Public Sector Funding (Pemda/BUMD/BLUD)", 0.00),
+    ("ASF — Bank/FI", "Funding from banks & financial institutions (weighted)",
+     "ASF Bank/FI", 1.00),
+    ("ASF — Matured", "Deposits already matured (payable now)",
+     "Matured Deposits (0% ASF)", 0.00),
     ("ASF — Capital", "Tier 1 capital", "tier1_capital", 1.00),
 ]
 
 NSFR_RSF_SPEC = [
     ("RSF — HQLA", "Cash (KAS)", "kas", 0.00),
-    ("RSF — HQLA", "BI placement (FASBIS + Giro BI)", "fasbis", 0.00),
-    ("RSF — HQLA", "SBI (unencumbered)", "sukbi", 0.00),
+    ("RSF — HQLA", "BI placement (Deposit Facility + Giro BI)", "penempatan_bi", 0.00),
+    ("RSF — HQLA", "SBI (unencumbered)", "sbi", 0.00),
     ("RSF — Interbank", "Placement at other banks", "interbank", 0.15),
-    ("RSF — Financing", "Performing financing <6m", "perf_A", 0.50),
-    ("RSF — Financing", "Performing financing 6m–1yr", "perf_B", 0.50),
-    ("RSF — Financing", "Performing financing ≥1yr", "perf_C", 0.65),
-    ("RSF — Financing", "Non-performing financing (NPF)", "npf", 1.00),
+    ("RSF — Loans", "Performing loans <6m", "perf_A", 0.50),
+    ("RSF — Loans", "Performing loans 6m–1yr", "perf_B", 0.50),
+    ("RSF — Loans", "Performing loans ≥1yr", "perf_C", 0.65),
+    ("RSF — Loans", "Non-performing loans (NPL)", "npl", 1.00),
     ("RSF — Securities", "Non-HQLA securities held", "non_hqla_sb", 0.50),
+    # PERLU KONFIRMASI — see RSF_SURAT_BERHARGA_DIAGUNKAN in src/nsfr_engine.py.
+    ("RSF — Securities", "SBI pledged as collateral (encumbered)", "sbi_encumbered",
+     nsfr_engine.RSF_SURAT_BERHARGA_DIAGUNKAN),
     ("RSF — Other", "Fixed assets & inventory", "fixed", 1.00),
     ("RSF — Other", "Other assets", "other", 1.00),
 ]

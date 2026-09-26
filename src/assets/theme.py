@@ -34,21 +34,25 @@ ASF_COLORS = {                      # ASF factor → more stable = stronger gree
     "SME Stable (95%)":      "#22C55E",
     "Retail Unstable (90%)": "#86EFAC",
     "SME Unstable (90%)":    "#86EFAC",
-    "Corporate (50%)":       "#F59E0B",
+    "Corporate + Public Sector (50%)": "#F59E0B",
+    "Bank/FI":                        "#FB923C",
 }
 RSF_COLORS = {                      # RSF factor → heavier requirement = hotter
     "HQLA (0%)":              "#22C55E",
-    "Financing <6m (50%)":    "#FCD34D",
-    "Financing 6m–1y (50%)":  "#FCD34D",
-    "Financing ≥1y (65%)":    "#F59E0B",
-    "NPF (100%)":             "#EF4444",
+    "Loans <6m (50%)":    "#FCD34D",
+    "Loans 6m–1y (50%)":  "#FCD34D",
+    "Loans ≥1y (65%)":    "#F59E0B",
+    "NPL (100%)":             "#EF4444",
     "Fixed Assets (100%)":    "#EF4444",
+    "Encumbered Securities":  "#DC2626",
 }
 LCR_OUTFLOW_COLORS = {              # one hue family: all are stressed outflows
-    "Retail":     "#60A5FA",
-    "SME (UMK)":  "#3B82F6",
-    "Corporate":  "#2563EB",
-    "Additional": "#93C5FD",
+    "Retail":        "#93C5FD",
+    "SME (UMK)":     "#60A5FA",
+    "Corporate":     "#3B82F6",
+    "Public Sector": "#2563EB",     # Pemda / BUMD / BLUD — the BPD concentration
+    "Bank/FI":       "#1D4ED8",
+    "Additional":    "#BFDBFE",
 }
 HQLA_COLORS = {
     "Cash":          "#22C55E",
@@ -58,7 +62,8 @@ HQLA_COLORS = {
 
 FONT_FAMILY = "Inter, -apple-system, 'Segoe UI', sans-serif"
 
-# Regulatory minimum is 100% for LCR and NSFR (POJK No. 20/2025). The 10pt
+# Regulatory minimum is 100% for LCR and NSFR (POJK 42/2015 jo. 19/2024 and
+# POJK 50/2017 jo. 20/2024 respectively). The 10pt
 # band above it is a management early-warning buffer, not a regulatory limit.
 RATIO_MINIMUM = 100.0
 RATIO_BUFFER = 110.0

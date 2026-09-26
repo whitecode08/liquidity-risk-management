@@ -121,10 +121,10 @@ if nsfr_res:
 
     rsf = nsfr_res["rsf"]
     performing = rsf.get("perf_A", 0) + rsf.get("perf_B", 0) + rsf.get("perf_C", 0)
-    npf = rsf.get("npf", 0)
-    npf_ratio = (npf / (performing + npf) * 100) if (performing + npf) else 0.0
-    tiles.append(ui.kpi_card("triangle-alert", "NPF Ratio", f"{npf_ratio:.2f}%",
-                             "warning" if npf_ratio < 5 else "critical"))
+    npl = rsf.get("npl", 0)
+    npl_ratio = (npl / (performing + npl) * 100) if (performing + npl) else 0.0
+    tiles.append(ui.kpi_card("triangle-alert", "NPL Ratio", f"{npl_ratio:.2f}%",
+                             "warning" if npl_ratio < 5 else "critical"))
 
     ldr_row = nsfr_res["dfs"]["nrc_rangkuman"]
     ldr_match = ldr_row.loc[ldr_row["KETERANGAN"] == "LDR", "REALISASI"]
@@ -159,24 +159,32 @@ if scope.startswith("Combined") and ilaap_res:
 
 if st.button("Generate Executive Summary", type="primary", icon=":material/auto_awesome:",
              use_container_width=True):
-    with st.spinner(f"Analyzing liquidity position with `{model}`…"):
-        if scope.startswith("LCR"):
-            text, err = lcr_summary(
-                lcr_res["lcr"], lcr_res["hqla"], lcr_res["outflow"], lcr_res["inflow"], model=model
-            )
-        elif scope.startswith("NSFR"):
-            text, err = nsfr_summary(
-                nsfr_res["nsfr"], nsfr_res["asf"], nsfr_res["rsf"], model=model
-            )
-        elif scope.startswith("ILAAP"):
-            text, err = ilaap_summary(ilaap_res, model=model)
-        else:
-            text, err = combined_summary(lcr_res, nsfr_res, ilaap_res, model=model)
+    status = st.status(f"Analyzing liquidity position with `{model}`…", expanded=True)
+    live = status.empty()
+
+    def _on_delta(partial_text: str) -> None:
+        live.markdown(partial_text + " ▌")
+
+    if scope.startswith("LCR"):
+        text, err = lcr_summary(
+            lcr_res["lcr"], lcr_res["hqla"], lcr_res["outflow"], lcr_res["inflow"],
+            model=model, on_delta=_on_delta,
+        )
+    elif scope.startswith("NSFR"):
+        text, err = nsfr_summary(
+            nsfr_res["nsfr"], nsfr_res["asf"], nsfr_res["rsf"], model=model, on_delta=_on_delta
+        )
+    elif scope.startswith("ILAAP"):
+        text, err = ilaap_summary(ilaap_res, model=model, on_delta=_on_delta)
+    else:
+        text, err = combined_summary(lcr_res, nsfr_res, ilaap_res, model=model, on_delta=_on_delta)
 
     if err:
+        status.update(label="Generation failed", state="error", expanded=False)
         al.record_error("AI Summary", f"Generation failed ({model}): {err}")
         st.error(err)
     else:
+        status.update(label="Report generated", state="complete", expanded=False)
         al.record_ai(model, scope, prompt_chars=0, response_chars=len(text))
         st.session_state["executive_summary_text"] = text
         st.session_state["executive_summary_meta"] = {

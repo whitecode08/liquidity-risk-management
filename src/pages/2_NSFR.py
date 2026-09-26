@@ -2,7 +2,7 @@
 NSFR Calculator Page
 =====================
 Net Stable Funding Ratio — 1-year structural liquidity horizon.
-POJK No. 20 Tahun 2025 — minimum 100%.
+POJK 50/2017 jo. POJK 20/2024 — minimum 100%.
 
 Formula: NSFR = ASF / RSF × 100%
   ASF = Available Stable Funding (weighted liabilities + equity)
@@ -16,7 +16,6 @@ import math
 import pathlib
 import pandas as pd
 import streamlit as st
-from datetime import datetime
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _SRC_DIR  = pathlib.Path(__file__).resolve().parent.parent  # src/
@@ -38,15 +37,13 @@ from assets.theme import ASF_COLORS, RSF_COLORS, COLORS, ratio_status
 # ── Hero ──────────────────────────────────────────────────────────────────────
 ui.hero("NSFR Calculator",
         "1-year structural liquidity assessment &nbsp;·&nbsp; Upload source files → ASF / RSF calculation → OJK report"
-        " &nbsp;·&nbsp; POJK No. 20 Tahun 2025 &nbsp;·&nbsp; Minimum 100%",
+        " &nbsp;·&nbsp; POJK 50/2017 jo. POJK 20/2024 &nbsp;·&nbsp; Minimum 100%",
         "NSFR — Net Stable Funding Ratio", "landmark", "green")
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
+# No manual "Reporting Date" input — see the matching note on the LCR page.
+# The date is read from the uploaded files' own `periodeData`, not picked.
 with st.sidebar:
-    st.markdown("## Parameters")
-    asof_date     = st.date_input("Reporting Date (As-Of)", value=datetime.today(), key="nsfr_date")
-    asof_date_str = asof_date.strftime("%Y-%m-%d")
-
     st.markdown("## Source Files")
     st.markdown(
         "<small>Required: "
@@ -66,7 +63,7 @@ with st.sidebar:
         label_visibility="collapsed", key="nsfr_tpl",
     )
     st.markdown("---")
-    st.caption("NSFR Calculator v1.0 · POJK No. 20 / 2025")
+    st.caption("NSFR Calculator v1.0 · POJK 50/2017 jo. 20/2024")
 
 # ── File detection ────────────────────────────────────────────────────────────
 get = lambda kw: next((f for f in (files or []) if kw.lower() in f.name.lower()), None)
@@ -92,6 +89,37 @@ for i, (key, (f, label)) in enumerate(required_map.items()):
     with (cols_l if i % 2 == 0 else cols_r):
         ui.md(ui.file_badge(key, f.name if f else None))
 
+# ── As-of date, derived from the data ─────────────────────────────────────────
+asof_date_str, per_file_dates = pl.resolve_asof_date(
+    {k: f.getvalue() for k, (f, _l) in required_map.items() if f}
+)
+date_blocked = False
+if not files:
+    ui.section("Reporting Date")
+    st.caption("Detected automatically from the uploaded files' own `periodeData` — "
+               "upload the source files below to see it.")
+elif asof_date_str:
+    ui.section("Reporting Date")
+    st.info(f"**{asof_date_str}** — read from `periodeData` in the uploaded files.",
+            icon=":material/event:")
+elif per_file_dates:
+    # Files uploaded, each reports a date, but they disagree — a genuine data
+    # problem (mixed reporting periods), not something a date picker could
+    # have caught either. Block rather than silently pick one.
+    date_blocked = True
+    ui.section("Reporting Date")
+    mismatch_df = pd.DataFrame(
+        [(k, v) for k, v in per_file_dates.items()], columns=["File", "periodeData"])
+    st.error(
+        "⚠️ **File yang diupload melaporkan tanggal berbeda-beda.** Semua file "
+        "sumber harus untuk posisi laporan yang sama — periksa apakah salah satu "
+        "file tertukar dari periode lain.",
+        icon=":material/error:",
+    )
+    st.dataframe(mismatch_df, use_container_width=True, hide_index=True)
+else:
+    date_blocked = True
+
 # ── Session management ────────────────────────────────────────────────────────
 # file_id changes on every (re-)upload, so replacing a file with a same-named
 # one still invalidates the previous result.
@@ -108,11 +136,13 @@ st.divider()
 col_btn, col_hint = st.columns([1, 3])
 with col_btn:
     if st.button("Run NSFR Analysis", type="primary", icon=":material/play_arrow:",
-                 disabled=not ok_all, use_container_width=True, key="nsfr_run"):
+                 disabled=not ok_all or date_blocked, use_container_width=True, key="nsfr_run"):
         st.session_state["nsfr_started"] = True
 with col_hint:
     if not ok_all:
         st.warning("Upload all 7 required files to enable analysis.", icon=":material/warning:")
+    elif date_blocked:
+        st.warning("Resolve the reporting date above to enable analysis.", icon=":material/warning:")
 
 if not st.session_state.get("nsfr_started"):
     ui.empty_state("landmark", "No Analysis Yet",
@@ -168,7 +198,8 @@ ui.kpi_grid([
     ui.kpi_card("trending-down", "Total RSF", fmt_currency(hasil_nsfr["Total RSF"])),
     ui.kpi_card("gauge", "NSFR Ratio", nsfr_disp, status),
 ])
-st.caption("ASF factors: Retail/SME stable 95%, less stable 90%, Corporate 50% per POJK No. 20/2025. "
+st.caption("ASF factors: Retail/SME stable 95%, less stable 90%, Corporate & Entitas Sektor Publik 50% "
+           "per POJK 50/2017 jo. POJK 20/2024. Matured deposits carry 0%. "
            "Values in IDR. Status: ≥110% compliant · 100–110% thin buffer · <100% breach.")
 
 # ── Visualizations ────────────────────────────────────────────────────────────
@@ -182,7 +213,8 @@ with vc1:
             hasil_asf.get("ASF SME Stable (95%)", 0),
             hasil_asf.get("ASF Retail Unstable (90%)", 0),
             hasil_asf.get("ASF SME Unstable (90%)", 0),
-            hasil_asf.get("ASF Corporate (50%)", 0),
+            hasil_asf.get("ASF Corporate + Public Sector (50%)", 0),
+            hasil_asf.get("ASF Bank/FI", 0),
         ],
     })
     ch, omitted = ct.hbar(asf_df, label="Segment", value="Amount", colors=ASF_COLORS,
@@ -196,11 +228,15 @@ with vc2:
         "Component": list(RSF_COLORS),
         "Amount": [
             hasil_rsf.get("RSF — HQLA (0%)", 0),
-            hasil_rsf.get("RSF — Performing Financing <6m (50%)", 0),
-            hasil_rsf.get("RSF — Performing Financing 6m-1yr (50%)", 0),
-            hasil_rsf.get("RSF — Performing Financing ≥1yr (65%)", 0),
-            hasil_rsf.get("RSF — NPF (100%)", 0),
+            hasil_rsf.get("RSF — Performing Loans <6m (50%)", 0),
+            hasil_rsf.get("RSF — Performing Loans 6m-1yr (50%)", 0),
+            hasil_rsf.get("RSF — Performing Loans ≥1yr (65%)", 0),
+            hasil_rsf.get("RSF — NPL (100%)", 0),
             hasil_rsf.get("RSF — Fixed Assets (100%)", 0),
+            # Key carries the factor, which is a placeholder — look it up rather
+            # than hard-coding the percentage into the label here.
+            next((v for k, v in hasil_rsf.items()
+                  if k.startswith("RSF — Encumbered Securities")), 0),
         ],
     })
     ch, omitted = ct.hbar(rsf_df, label="Component", value="Amount", colors=RSF_COLORS,
@@ -248,10 +284,22 @@ with tab_asf:
                                "Amount (IDR)": [fmt_currency(v) for v in umk_items.values()]}),
                  use_container_width=True, hide_index=True)
 
-    st.markdown("**Corporate Funding (Korporasi)**")
-    corp_items = {k: v for k, v in hasil_asf.items() if "Corporate" in k or "Corp" in k}
+    st.markdown("**Corporate & Public Sector Funding (Korporasi, Pemda/BUMD/BLUD)**")
+    corp_items = {k: v for k, v in hasil_asf.items()
+                  if "Corporate" in k or "Corp" in k or "Public Sector" in k}
     st.dataframe(pd.DataFrame({"Component": list(corp_items.keys()),
                                "Amount (IDR)": [fmt_currency(v) for v in corp_items.values()]}),
+                 use_container_width=True, hide_index=True)
+    st.caption("Entitas Sektor Publik carries the same ASF factors as Korporasi and is "
+               "included in the corp_* figures; it is shown separately so the Pemda (RKUD) "
+               "concentration stays visible.")
+
+    st.markdown("**Bank/FI Funding & Matured Deposits**")
+    other_items = {k: hasil_asf[k] for k in
+                   ("Bank/FI Funding", "ASF Bank/FI", "Matured Deposits (0% ASF)")
+                   if k in hasil_asf}
+    st.dataframe(pd.DataFrame({"Component": list(other_items.keys()),
+                               "Amount (IDR)": [fmt_currency(v) for v in other_items.values()]}),
                  use_container_width=True, hide_index=True)
 
     st.divider()
@@ -314,4 +362,4 @@ def _downloads():
 
 _downloads()
 
-ui.footer("© 2025 — NSFR Calculator &nbsp;·&nbsp; Powered by Streamlit &nbsp;·&nbsp; POJK No. 20 Tahun 2025")
+ui.footer("© 2025 — NSFR Calculator &nbsp;·&nbsp; Powered by Streamlit &nbsp;·&nbsp; POJK 50/2017 jo. POJK 20/2024")

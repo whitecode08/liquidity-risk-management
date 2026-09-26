@@ -2,7 +2,7 @@
 LCR Calculator Page
 ====================
 Liquidity Coverage Ratio — 30-day stress horizon.
-POJK No. 20 Tahun 2025 — minimum 100%.
+POJK 42/2015 jo. POJK 19/2024 — minimum 100%.
 
 Run from project root:  streamlit run src/app.py
 """
@@ -12,7 +12,6 @@ import math
 import pathlib
 import pandas as pd
 import streamlit as st
-from datetime import datetime
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 _SRC_DIR  = pathlib.Path(__file__).resolve().parent.parent  # src/
@@ -36,15 +35,18 @@ from assets.theme import COLORS, HQLA_COLORS, LCR_OUTFLOW_COLORS, ratio_status
 # ── Hero ──────────────────────────────────────────────────────────────────────
 ui.hero("LCR Calculator",
         "30-day liquidity stress test &nbsp;·&nbsp; Upload source files → auto-calculation → OJK report export"
-        " &nbsp;·&nbsp; POJK No. 20 Tahun 2025 &nbsp;·&nbsp; Minimum 100%",
+        " &nbsp;·&nbsp; POJK 42/2015 jo. POJK 19/2024 &nbsp;·&nbsp; Minimum 100%",
         "LCR — Liquidity Coverage Ratio", "droplet")
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
+# No manual "Reporting Date" input: the reporting date is not a free choice,
+# it's a fact the uploaded files already state in their own `periodeData`
+# column. A picker defaulting to "today" with no link to the files let the
+# as-of date silently drift from the data's actual date — every tenor/maturity
+# calculation still ran, just against the wrong horizon, producing a fully
+# plausible but wrong LCR with no error to catch it. Reading it from the files
+# removes the chance to get it wrong.
 with st.sidebar:
-    st.markdown("## Parameters")
-    asof_date     = st.date_input("Reporting Date (As-Of)", value=datetime.today(), key="lcr_date")
-    asof_date_str = asof_date.strftime("%Y-%m-%d")
-
     st.markdown("## Source Files")
     st.markdown(
         "<small>Required: "
@@ -64,7 +66,7 @@ with st.sidebar:
     )
 
     st.markdown("---")
-    st.caption("LCR Calculator v2.1 · POJK No. 20 / 2025")
+    st.caption("LCR Calculator v2.1 · POJK 42/2015 jo. 19/2024")
 
 # ── File Detection ────────────────────────────────────────────────────────────
 get = lambda kw: next((f for f in (files or []) if kw.lower() in f.name.lower()), None)
@@ -90,6 +92,39 @@ for i, (key, (f, label)) in enumerate(required_map.items()):
     with (cols_l if i % 2 == 0 else cols_r):
         ui.md(ui.file_badge(key, f.name if f else None))
 
+# ── As-of date, derived from the data ─────────────────────────────────────────
+asof_date_str, per_file_dates = pl.resolve_asof_date(
+    {k: f.getvalue() for k, (f, _l) in required_map.items() if f}
+)
+date_blocked = False
+if not files:
+    ui.section("Reporting Date")
+    st.caption("Detected automatically from the uploaded files' own `periodeData` — "
+               "upload the source files below to see it.")
+elif asof_date_str:
+    ui.section("Reporting Date")
+    st.info(f"**{asof_date_str}** — read from `periodeData` in the uploaded files.",
+            icon=":material/event:")
+elif per_file_dates:
+    # Files uploaded, each reports a date, but they disagree — a genuine data
+    # problem (mixed reporting periods), not something a date picker could
+    # have caught either. Block rather than silently pick one.
+    date_blocked = True
+    ui.section("Reporting Date")
+    mismatch_df = pd.DataFrame(
+        [(k, v) for k, v in per_file_dates.items()], columns=["File", "periodeData"])
+    st.error(
+        "⚠️ **File yang diupload melaporkan tanggal berbeda-beda.** Semua file "
+        "sumber harus untuk posisi laporan yang sama — periksa apakah salah satu "
+        "file tertukar dari periode lain.",
+        icon=":material/error:",
+    )
+    st.dataframe(mismatch_df, use_container_width=True, hide_index=True)
+else:
+    # Files uploaded (or being uploaded) but none of them carry periodeData yet
+    # — e.g. still mid-upload, or NeracaHarian-only so far.
+    date_blocked = True
+
 # ── Input change detection ────────────────────────────────────────────────────
 # file_id changes on every (re-)upload, so replacing a file with a same-named
 # one still invalidates the previous result.
@@ -106,11 +141,13 @@ st.divider()
 col_btn, col_hint = st.columns([1, 3])
 with col_btn:
     if st.button("Run LCR Analysis", type="primary", icon=":material/play_arrow:",
-                 disabled=not ok_all, use_container_width=True, key="lcr_run"):
+                 disabled=not ok_all or date_blocked, use_container_width=True, key="lcr_run"):
         st.session_state["lcr_started"] = True
 with col_hint:
     if not ok_all:
         st.warning("Upload all 7 required files to enable analysis.", icon=":material/warning:")
+    elif date_blocked:
+        st.warning("Resolve the reporting date above to enable analysis.", icon=":material/warning:")
 
 if not st.session_state.get("lcr_started"):
     ui.empty_state("droplet", "No Analysis Yet",
@@ -183,6 +220,8 @@ with vc1:
             hasil_outflow["Total Outflow Pendanaan Perorangan"],
             hasil_outflow["Total Outflow Pendanaan UMK"],
             hasil_outflow["Total Outflow Pendanaan Korporasi"],
+            hasil_outflow["Total Outflow Pendanaan Sektor Publik"],
+            hasil_outflow["Total Outflow Pendanaan Lembaga Keuangan"],
             hasil_outflow["Total Outflow Tambahan"],
         ],
     })
@@ -250,10 +289,13 @@ with tab2:
     st.dataframe(pd.DataFrame([(k, fmt_currency(v)) for k, v in hasil_outflow.items()],
                               columns=["Component","Amount (IDR)"]),
                  use_container_width=True, hide_index=True)
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Total Outflow", fmt_currency(hasil_outflow["Total Outflow"]))
     c2.metric("Retail + SME",  fmt_currency(hasil_outflow["Total Outflow Pendanaan Perorangan"] + hasil_outflow["Total Outflow Pendanaan UMK"]))
     c3.metric("Corporate",     fmt_currency(hasil_outflow["Total Outflow Pendanaan Korporasi"]))
+    c4.metric("Public Sector", fmt_currency(hasil_outflow["Total Outflow Pendanaan Sektor Publik"]),
+              help="Pemda (RKUD) / BUMD / instansi-BLUD. Run-off rates are placeholders "
+                   "pending confirmation against POJK 42/2015 jo. 19/2024 Pasal 25.")
 
 with tab3:
     ui.section("Expected Cash Inflows — 30-Day Horizon")
@@ -310,4 +352,4 @@ def _downloads():
 
 _downloads()
 
-ui.footer("© 2025 — LCR Calculator &nbsp;·&nbsp; Powered by Streamlit &nbsp;·&nbsp; POJK No. 20 Tahun 2025")
+ui.footer("© 2025 — LCR Calculator &nbsp;·&nbsp; Powered by Streamlit &nbsp;·&nbsp; POJK 42/2015 jo. POJK 19/2024")

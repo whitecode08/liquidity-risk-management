@@ -18,7 +18,12 @@ sys.path.insert(0, str(_SRC_DIR))
 from lcr_engine import (  # noqa: E402
     get_runoff_rate, get_inflow_rate, get_additional_outflow_rate,
     hqla_calc, dpk_organize, outflow_retail, outflow_umk, outflow_corp,
+    outflow_sektor_publik, outflow_bank,
     outflow_additional, inflow_counterparty, lcr_calculation, safe_read_excel,
+    split_lps, normalize_kategori, rka_liability_amount,
+    LPS_COVERAGE_LIMIT, LPS_RATE_CEILING, RKA_UNDRAWN_PATTERN,
+    RUNOFF_PSE_OP_LPS, RUNOFF_PSE_OP_NONLPS,
+    RUNOFF_PSE_NONOP_LPS, RUNOFF_PSE_NONOP_NONLPS, RUNOFF_BANK,
 )
 from ilaap.available_hqla import available_hqla_calc  # noqa: E402
 from ilaap import data_contract  # noqa: E402
@@ -54,6 +59,91 @@ class TestRateTables(unittest.TestCase):
             get_runoff_rate("unknown_segment")
         with self.assertRaises(ValueError):
             get_runoff_rate("retail")  # missing stabilitas
+
+    def test_runoff_sektor_publik_and_bank(self):
+        """The Entitas Sektor Publik rates are placeholders pending confirmation
+        (see RUNOFF_PSE_* in lcr_engine.py); this only pins the table wiring, so
+        that changing a constant there changes the rate the engine applies."""
+        self.assertEqual(get_runoff_rate("sektor_publik", operasional=True, dijamin_lps=True),
+                         RUNOFF_PSE_OP_LPS)
+        self.assertEqual(get_runoff_rate("sektor_publik", operasional=True, dijamin_lps=False),
+                         RUNOFF_PSE_OP_NONLPS)
+        self.assertEqual(get_runoff_rate("sektor_publik", operasional=False, dijamin_lps=True),
+                         RUNOFF_PSE_NONOP_LPS)
+        self.assertEqual(get_runoff_rate("sektor_publik", operasional=False, dijamin_lps=False),
+                         RUNOFF_PSE_NONOP_NONLPS)
+        self.assertEqual(get_runoff_rate("bank"), RUNOFF_BANK)
+        with self.assertRaises(ValueError):
+            get_runoff_rate("sektor_publik")  # missing operasional/dijamin_lps
+
+
+class TestCategorisationAndLpsSplit(unittest.TestCase):
+    def test_jenis_nasabah_maps_to_categories(self):
+        self.assertEqual(normalize_kategori("Perorangan"), "Retail")
+        self.assertEqual(normalize_kategori("UMK"), "UMK")
+        self.assertEqual(normalize_kategori("Korporasi"), "Korporasi")
+        for pse in ("Pemda", "BUMD", "Instansi/BLUD"):
+            self.assertEqual(normalize_kategori(pse), "Entitas Sektor Publik", pse)
+        self.assertEqual(normalize_kategori("Bank Lain"), "Bank")
+
+    def test_unknown_or_missing_category_returns_none(self):
+        for bad in (None, float("nan"), "", "   ", "Koperasi Serba Usaha"):
+            self.assertIsNone(normalize_kategori(bad), bad)
+
+    def test_lps_split_cuts_through_the_account(self):
+        """An account above the LPS limit is PARTLY insured, not wholly
+        uninsured — the balance splits, it does not pick one side."""
+        balances = pd.Series([1e9, LPS_COVERAGE_LIMIT, 5e9])
+        dijamin, excess = split_lps(balances)
+        self.assertEqual(list(dijamin), [1e9, 2e9, 2e9])
+        self.assertEqual(list(excess), [0.0, 0.0, 3e9])
+        # Nothing is created or lost by the split.
+        self.assertTrue(((dijamin + excess) == balances).all())
+
+    def test_lps_split_rate_above_ceiling_forfeits_the_whole_balance(self):
+        """A deposit priced above LPS_RATE_CEILING loses the guarantee on its
+        ENTIRE balance — even the portion under LPS_COVERAGE_LIMIT — unlike the
+        coverage-limit rule, which only strips the excess above it."""
+        balances = pd.Series([500_000_000.0, 5_000_000_000.0])
+        rates = pd.Series([LPS_RATE_CEILING + 0.5, LPS_RATE_CEILING - 0.5])
+        dijamin, excess = split_lps(balances, rates)
+        self.assertEqual(list(dijamin), [0.0, LPS_COVERAGE_LIMIT])
+        self.assertEqual(list(excess), [500_000_000.0, 3_000_000_000.0])
+
+    def test_lps_split_missing_rate_defaults_to_compliant(self):
+        """No rate column (None) or a blank rate (NaN) on some rows must not
+        silently zero out the guarantee — only an actual above-ceiling value
+        disqualifies an account."""
+        balances = pd.Series([1_000_000_000.0, 1_000_000_000.0])
+        dijamin_no_rate, _ = split_lps(balances, None)
+        self.assertEqual(list(dijamin_no_rate), [1_000_000_000.0, 1_000_000_000.0])
+
+        rates = pd.Series([float("nan"), LPS_RATE_CEILING + 1.0])
+        dijamin, excess = split_lps(balances, rates)
+        self.assertEqual(list(dijamin), [1_000_000_000.0, 0.0])
+        self.assertEqual(list(excess), [0.0, 1_000_000_000.0])
+
+
+class TestRkaSectionScoping(unittest.TestCase):
+    """Both the TAGIHAN and the KEWAJIBAN block of the RKA sheet carry a row
+    named 'FASILITAS KREDIT YANG BELUM DITARIK'. Only the KEWAJIBAN one is an
+    outflow, so a whole-sheet match would double-count it."""
+
+    def test_only_liability_section_counted(self):
+        df = pd.DataFrame([
+            ("TAGIHAN KOMITMEN", float("nan")),
+            ("FASILITAS KREDIT YANG BELUM DITARIK", 500.0),
+            ("KEWAJIBAN KOMITMEN", float("nan")),
+            ("FASILITAS KREDIT YANG BELUM DITARIK", 800.0),
+        ], columns=["KETERANGAN", "NILAI"])
+        self.assertEqual(rka_liability_amount(df, RKA_UNDRAWN_PATTERN), 800.0)
+
+    def test_matches_both_kredit_and_legacy_pembiayaan_wording(self):
+        for label in ("FASILITAS KREDIT YANG BELUM DITARIK",
+                       "FASILITAS PEMBIAYAAN YANG BELUM DITARIK"):
+            df = pd.DataFrame([("KEWAJIBAN KOMITMEN", float("nan")), (label, 700.0)],
+                              columns=["KETERANGAN", "NILAI"])
+            self.assertEqual(rka_liability_amount(df, RKA_UNDRAWN_PATTERN), 700.0, label)
 
 
 # ── Bucket assignment tests ──────────────────────────────────────────────────
@@ -224,28 +314,86 @@ class TestAgainstDummyData(unittest.TestCase):
 
 # ── Regression: refactor must not change LCR/NSFR results ──────────────────
 
-class TestLcrRegressionAfterRefactor(unittest.TestCase):
-    """get_runoff_rate/get_inflow_rate extraction must be behavior-preserving."""
+class TestLcrEndToEnd(unittest.TestCase):
+    """End-to-end LCR against the dummy BPD book.
+
+    Deliberately NOT pinned to a frozen ratio: the dummy generator is expected
+    to keep evolving with the BPD profile, and a golden number would then fail
+    for a reason that has nothing to do with the engine. What is asserted is
+    that the figures hang together — every funding segment reaches the
+    denominator, and the parts sum to the whole.
+    """
 
     @unittest.skipUnless(_DUMMY_DIR.exists(), "dummy data not generated")
-    def test_lcr_matches_known_value(self):
-        date = "2025-09-30"
-        (df_aset, df_rangkuman, df_rka, df_pbi, df_sbi,
-         df_tab, df_giro, df_depo, df_fin, _) = _load_period(date)
-        df_tab, df_giro, df_depo = dpk_organize(df_tab, df_giro, df_depo)
-
-        hqla = hqla_calc(df_aset, df_rangkuman, df_pbi, df_sbi)
-        outflow = {
-            **outflow_retail(df_tab, df_giro, df_depo, date),
-            **outflow_umk(df_tab, df_giro, df_depo, date),
-            **outflow_corp(df_tab, df_giro, df_depo, date),
-            **outflow_additional(df_rka),
+    def setUp(self):
+        self.date = "2025-09-30"
+        (self.df_aset, self.df_rangkuman, self.df_rka, self.df_pbi, self.df_sbi,
+         df_tab, df_giro, df_depo, self.df_fin, _) = _load_period(self.date)
+        self.df_tab, self.df_giro, self.df_depo = dpk_organize(df_tab, df_giro, df_depo, self.date)
+        args = (self.df_tab, self.df_giro, self.df_depo, self.date)
+        self.segments = {
+            "Perorangan": outflow_retail(*args),
+            "UMK": outflow_umk(*args),
+            "Korporasi": outflow_corp(*args),
+            "Sektor Publik": outflow_sektor_publik(*args),
+            "Lembaga Keuangan": outflow_bank(*args),
+            "Tambahan": outflow_additional(self.df_rka),
         }
-        inflow = inflow_counterparty(df_fin, df_aset, date)
-        lcr = lcr_calculation(hqla, outflow, inflow)
+        self.outflow = {k: v for seg in self.segments.values() for k, v in seg.items()}
+        self.hqla = hqla_calc(self.df_aset, self.df_rangkuman, self.df_pbi, self.df_sbi)
+        self.inflow = inflow_counterparty(self.df_fin, self.df_aset, self.date)
+        self.lcr = lcr_calculation(self.hqla, self.outflow, self.inflow)
 
-        # Known-good value captured before/after the get_runoff_rate refactor.
-        self.assertAlmostEqual(lcr["LCR"], 255.4816, places=3)
+    def test_lcr_is_finite_and_positive(self):
+        self.assertGreater(self.lcr["LCR"], 0)
+        self.assertLess(self.lcr["LCR"], 10_000)
+        self.assertGreater(self.lcr["Total Cash Outflow"], 0)
+
+    def test_every_segment_reaches_the_total(self):
+        """The bug this guards: lcr_calculation() used to sum a hard-coded list
+        of four keys, so a newly added segment produced its own total and was
+        then silently dropped from the denominator."""
+        expected = sum(
+            v for seg in self.segments.values() for k, v in seg.items()
+            if k.startswith("Total Outflow Pendanaan") or k == "Total Outflow Tambahan"
+        )
+        self.assertAlmostEqual(self.lcr["Total Cash Outflow"], expected, places=2)
+        for name in ("Sektor Publik", "Lembaga Keuangan"):
+            total_key = next(k for k in self.segments[name] if k.startswith("Total Outflow"))
+            self.assertGreater(self.segments[name][total_key], 0,
+                               f"{name} contributed no outflow — check jenisNasabah in the source data")
+
+    def test_dpk_categories_come_from_the_source_data(self):
+        """jenisNasabah must be read, not guessed. If the balance heuristic were
+        firing, no giro row could ever be categorised as Entitas Sektor Publik."""
+        self.assertIn("Entitas Sektor Publik", set(self.df_giro["kategoriNasabah"]))
+        self.assertIn("jenisNasabah", self.df_giro.columns)
+
+    def test_stability_is_not_just_the_lps_threshold(self):
+        """Stable funding requires an established relationship on top of LPS
+        coverage, so it must be strictly less than everything under the limit."""
+        insured_retail = 0.0
+        for df in (self.df_tab, self.df_giro, self.df_depo):
+            retail = df[df["kategoriNasabah"] == "Retail"]
+            dijamin, _ = split_lps(retail["jumlahBulanLaporanActive"])
+            insured_retail += float(dijamin.sum())
+        self.assertGreater(self.outflow["Retail Stable Funding"], 0)
+        self.assertLess(self.outflow["Retail Stable Funding"], insured_retail)
+
+    def test_matured_deposits_are_charged_not_dropped(self):
+        """Overdue deposits used to be filtered out of the LCR entirely while
+        NSFR counted them as stable funding. Both engines now treat them as
+        maturing on day 0."""
+        tenor = (pd.to_datetime(self.df_depo["tanggalJatuhTempo"])
+                 - pd.to_datetime(self.date)).dt.days
+        # Bank/FI funding has no separate matured line — it runs off at 100%
+        # whether or not it has matured, so there is nothing to distinguish.
+        reported = self.df_depo["kategoriNasabah"] != "Bank"
+        overdue = float(self.df_depo.loc[(tenor <= 0) & reported, "jumlahBulanLaporanActive"].sum())
+        self.assertGreater(overdue, 0, "dummy data carries no overdue deposits to exercise this")
+        charged = sum(v for k, v in self.outflow.items() if "Matured Deposits" in k
+                      and not k.endswith("(100%)"))
+        self.assertAlmostEqual(charged, overdue, places=2)
 
 
 if __name__ == "__main__":

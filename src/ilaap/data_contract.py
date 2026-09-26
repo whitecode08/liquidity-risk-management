@@ -15,7 +15,7 @@ Design decision — HQLA assets are NOT included in this ledger:
 Only non-HQLA balance-sheet items enter the ledger:
     - Tabungan, Giro       -> funding, on-demand (no contractual tenor), outflow
     - Deposito             -> funding, has tanggalJatuhTempo, outflow
-    - Pinjaman             -> financing, has tanggalJatuhTempo, inflow
+    - Pinjaman             -> kredit (loans), has tanggalJatuhTempo, inflow
     - RKA off-balance items (undrawn commitment, guarantee) -> outflow,
       no tenor, aggregate only (no per-transaction detail available)
 
@@ -37,7 +37,10 @@ _SRC_DIR = pathlib.Path(__file__).resolve().parent.parent
 if str(_SRC_DIR) not in sys.path:
     sys.path.insert(0, str(_SRC_DIR))
 
-from lcr_engine import dpk_organize  # noqa: E402 — reuse existing categorization, no duplication
+from lcr_engine import (  # noqa: E402 — reuse existing categorization, no duplication
+    dpk_organize, split_lps, hubungan_mapan,
+    rka_liability_amount, RKA_UNDRAWN_PATTERN, RKA_GUARANTEE_PATTERN,
+)
 
 LEDGER_COLUMNS = [
     "sumber", "arah", "nilai_dasar", "tanggal_jatuh_tempo_kontraktual",
@@ -45,65 +48,95 @@ LEDGER_COLUMNS = [
 ]
 
 
-def _lps_threshold_flag(active_amount: pd.Series) -> pd.Series:
-    """Same IDR 2 miliar LPS/stability threshold used throughout lcr_engine.py."""
-    return active_amount <= 2e9
+_SEGMEN_OF_KATEGORI = {
+    "Retail": "retail",
+    "UMK": "umk",
+    "Korporasi": "korporasi",
+    "Entitas Sektor Publik": "sektor_publik",
+    "Bank": "bank",
+}
 
 
 def _funding_rows(df: pd.DataFrame, sumber: str, asof_date: str,
                    has_tenor: bool) -> pd.DataFrame:
-    """Tabungan/Giro (has_tenor=False) or Deposito (has_tenor=True) -> ledger rows."""
+    """Tabungan/Giro (has_tenor=False) or Deposito (has_tenor=True) -> ledger rows.
+
+    Each account can yield TWO ledger rows: one for the LPS-guaranteed slice and
+    one for the uninsured excess above the limit, mirroring lcr_engine.split_lps().
+    Rating the whole balance at a single rate — the previous behaviour — moved a
+    Rp5 miliar account entirely into the uninsured bucket, which is neither what
+    LPS coverage does nor what the LCR engine now computes.
+    """
     df = df.copy()
     active = df["jumlahBulanLaporanActive"]
-    stabil = _lps_threshold_flag(active)
-    dijamin_lps = _lps_threshold_flag(active)
+    dijamin, excess = split_lps(active, df.get("sukuBungaBulanLaporan"))
+    mapan = (df["hubunganMapan"] if "hubunganMapan" in df.columns
+             else hubungan_mapan(df, asof_date))
 
     if has_tenor:
-        tenor_hari = (pd.to_datetime(df["tanggalJatuhTempo"]) - pd.to_datetime(asof_date)).dt.days
+        jatuh_tempo = pd.to_datetime(df["tanggalJatuhTempo"], errors="coerce")
+        tenor_hari = (jatuh_tempo - pd.to_datetime(asof_date)).dt.days
         # Same 30-day heuristic outflow_corp() in lcr_engine.py uses to decide
         # whether a corporate account is "operational" (short-tenor placements
         # behave like operating balances) — reused here for consistency.
-        operasional = (tenor_hari <= 30) & (tenor_hari > 0)
-        jatuh_tempo = pd.to_datetime(df["tanggalJatuhTempo"])
+        # Already-matured rows (tenor <= 0) are handled separately below.
+        operasional = tenor_hari <= 30
+        sudah_jatuh_tempo = tenor_hari <= 0
     else:
         operasional = pd.Series(True, index=df.index)  # giro/tabungan corp = always operational
         jatuh_tempo = pd.Series(pd.NaT, index=df.index)
+        sudah_jatuh_tempo = pd.Series(False, index=df.index)
 
-    segmen = df["kategoriNasabah"].str.lower().map({
-        "retail": "retail", "umk": "umk", "korporasi": "korporasi",
-    })
+    segmen = df["kategoriNasabah"].map(_SEGMEN_OF_KATEGORI)
 
-    kategori_arus = np.select(
-        [
-            segmen.eq("retail") & stabil,
-            segmen.eq("retail") & ~stabil,
-            segmen.eq("umk") & stabil,
-            segmen.eq("umk") & ~stabil,
-            segmen.eq("korporasi") & operasional & dijamin_lps,
-            segmen.eq("korporasi") & operasional & ~dijamin_lps,
-            segmen.eq("korporasi") & ~operasional & dijamin_lps,
-            segmen.eq("korporasi") & ~operasional & ~dijamin_lps,
-        ],
-        [
-            "retail_stabil", "retail_tidak_stabil", "umk_stabil", "umk_tidak_stabil",
-            "korporasi_op_lps", "korporasi_op_nonlps",
-            "korporasi_nonop_lps", "korporasi_nonop_nonlps",
-        ],
-        default="tidak_diketahui",
-    )
+    def _kategori(is_guaranteed: bool) -> np.ndarray:
+        dijamin_lps = pd.Series(is_guaranteed, index=df.index)
+        stabil = dijamin_lps & mapan
+        return np.select(
+            [
+                sudah_jatuh_tempo,
+                segmen.eq("bank"),
+                segmen.eq("retail") & stabil,
+                segmen.eq("retail") & ~stabil,
+                segmen.eq("umk") & stabil,
+                segmen.eq("umk") & ~stabil,
+                segmen.eq("korporasi") & operasional & dijamin_lps,
+                segmen.eq("korporasi") & operasional & ~dijamin_lps,
+                segmen.eq("korporasi") & ~operasional & dijamin_lps,
+                segmen.eq("korporasi") & ~operasional & ~dijamin_lps,
+                segmen.eq("sektor_publik") & operasional & dijamin_lps,
+                segmen.eq("sektor_publik") & operasional & ~dijamin_lps,
+                segmen.eq("sektor_publik") & ~operasional & dijamin_lps,
+                segmen.eq("sektor_publik") & ~operasional & ~dijamin_lps,
+            ],
+            [
+                "deposito_jatuh_tempo", "bank",
+                "retail_stabil", "retail_tidak_stabil",
+                "umk_stabil", "umk_tidak_stabil",
+                "korporasi_op_lps", "korporasi_op_nonlps",
+                "korporasi_nonop_lps", "korporasi_nonop_nonlps",
+                "sektor_publik_op_lps", "sektor_publik_op_nonlps",
+                "sektor_publik_nonop_lps", "sektor_publik_nonop_nonlps",
+            ],
+            default="tidak_diketahui",
+        )
 
-    return pd.DataFrame({
-        "sumber": sumber,
-        "arah": "keluar",
-        "nilai_dasar": active,
-        "tanggal_jatuh_tempo_kontraktual": jatuh_tempo,
-        "mata_uang": "IDR",
-        "segmen_nasabah": segmen,
-        "kategori_arus": kategori_arus,
-    })
+    def _slice(nilai: pd.Series, is_guaranteed: bool) -> pd.DataFrame:
+        return pd.DataFrame({
+            "sumber": sumber,
+            "arah": "keluar",
+            "nilai_dasar": nilai,
+            "tanggal_jatuh_tempo_kontraktual": jatuh_tempo,
+            "mata_uang": "IDR",
+            "segmen_nasabah": segmen,
+            "kategori_arus": _kategori(is_guaranteed),
+        })
+
+    rows = pd.concat([_slice(dijamin, True), _slice(excess, False)], ignore_index=True)
+    return rows[rows["nilai_dasar"] > 0]
 
 
-def _financing_rows(df_fin: pd.DataFrame, asof_date: str) -> pd.DataFrame:
+def _kredit_rows(df_fin: pd.DataFrame, asof_date: str) -> pd.DataFrame:
     """Pinjaman -> ledger inflow rows.
 
     Eligibility mirrors lcr_engine.inflow_counterparty(): only kualitas == 1
@@ -113,8 +146,10 @@ def _financing_rows(df_fin: pd.DataFrame, asof_date: str) -> pd.DataFrame:
     NSFR one, is what the source spec asks this module to reuse.
     """
     df = df_fin.copy()
-    jatuh_tempo = pd.to_datetime(df["tanggalJatuhTempo"])
-    kategori_arus = np.where(df["kualitas"] == 1, "inflow_performing", "inflow_non_performing")
+    jatuh_tempo = pd.to_datetime(df["tanggalJatuhTempo"], errors="coerce")
+    # Coerced rather than compared directly — see lcr_engine.inflow_counterparty().
+    kualitas = pd.to_numeric(df["kualitas"], errors="coerce")
+    kategori_arus = np.where(kualitas == 1, "inflow_performing", "inflow_non_performing")
     return pd.DataFrame({
         "sumber": "pinjaman",
         "arah": "masuk",
@@ -128,16 +163,10 @@ def _financing_rows(df_fin: pd.DataFrame, asof_date: str) -> pd.DataFrame:
 
 def _off_balance_rows(df_rka: pd.DataFrame) -> pd.DataFrame:
     """RKA undrawn commitment / guarantee -> ledger outflow rows (no tenor,
-    aggregate only — same regex patterns as lcr_engine.outflow_additional())."""
-    df = df_rka.copy()
-    df["KETERANGAN"] = df["KETERANGAN"].astype(str).str.strip()
-
-    def sum_by_pattern(pat: str) -> float:
-        mask = df["KETERANGAN"].str.contains(pat, case=False, na=False, regex=True)
-        return float(df.loc[mask, "NILAI"].fillna(0).sum())
-
-    komitmen = sum_by_pattern(r"FASILITAS\s+(PEMBIAYAAN)\s+YANG\s+BELUM\s+DITARIK")
-    garansi = sum_by_pattern(r"GARANSI\s+YANG\s+DIBERIKAN")
+    aggregate only — reuses lcr_engine's own RKA matcher, so the ladder and the
+    LCR outflow can never read different rows out of the same sheet)."""
+    komitmen = rka_liability_amount(df_rka, RKA_UNDRAWN_PATTERN)
+    garansi = rka_liability_amount(df_rka, RKA_GUARANTEE_PATTERN)
 
     rows = []
     if komitmen:
@@ -169,7 +198,7 @@ def build_transactions_ledger(df_tab: pd.DataFrame, df_giro: pd.DataFrame,
         _funding_rows(df_tab, "tabungan", asof_date, has_tenor=False),
         _funding_rows(df_giro, "giro", asof_date, has_tenor=False),
         _funding_rows(df_depo, "deposito", asof_date, has_tenor=True),
-        _financing_rows(df_fin, asof_date),
+        _kredit_rows(df_fin, asof_date),
         _off_balance_rows(df_rka),
     ]
     ledger = pd.concat(parts, ignore_index=True, sort=False)[LEDGER_COLUMNS]

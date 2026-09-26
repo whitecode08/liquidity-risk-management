@@ -32,7 +32,7 @@ MODELS_URL = "https://api.openmodel.ai/web/v1/models"
 _PLACEHOLDERS = {"", "your_api_key_here", "your_key", "changeme", "xxx"}
 _SYSTEM = (
     "You are a senior liquidity risk analyst advising the ALCO and Board of a bank "
-    "supervised by OJK (Otoritas Jasa Keuangan), assessed against POJK No. 20/2025 (LCR/NSFR) "
+    "supervised by OJK (Otoritas Jasa Keuangan), assessed against POJK 42/2015 jo. 19/2024 (LCR) · POJK 50/2017 jo. 20/2024 (NSFR) "
     "and SEOJK No. 26/SEOJK.03/2025 (ILAAP). You write in precise, regulator-ready English and "
     "never invent figures that were not provided to you. If a figure needed to answer a question "
     "was not given in the data below, say explicitly that it is not available rather than "
@@ -155,15 +155,21 @@ def list_models() -> list[str]:
 
 
 # ─────────────────────────────── generation ─────────────────────────────────
-def _ask(prompt: str, model: str | None = None, max_tokens: int = 8000):
+def _ask(prompt: str, model: str | None = None, max_tokens: int = 8000, on_delta=None):
     """Send one prompt to OpenModel. Returns (text, error_message).
 
-    Some models on the OpenModel catalogue are reasoning models that emit
-    `thinking` content blocks before the final `text` block. If max_tokens is
-    too small, the model can spend its entire budget thinking and return no
-    text at all — this looked to users like the app "returning no context".
-    Mitigated two ways: a generous default max_tokens, and one automatic
-    retry with double the budget if the first attempt comes back empty.
+    Streams the response instead of waiting for it in one shot: reasoning
+    models on the OpenModel catalogue can go silent for a long time while
+    emitting `thinking` content blocks before the final `text` block, and a
+    non-streamed request has to sit through that with a fixed read timeout,
+    then retry the whole thing again if it comes back empty — worst case,
+    several minutes with no feedback at all. Streaming keeps the connection
+    alive (the API sends periodic progress pings while the model thinks) and
+    lets `on_delta`, if given, push partial text to the UI as it arrives.
+
+    If max_tokens is too small, the model can still spend its entire budget
+    thinking and return no text — mitigated with one automatic retry at
+    double the budget if the first attempt comes back empty.
     """
     key = get_api_key()
     if key.lower() in _PLACEHOLDERS:
@@ -190,17 +196,21 @@ def _ask(prompt: str, model: str | None = None, max_tokens: int = 8000):
         )
 
         def _generate(budget: int) -> str:
-            resp = client.messages.create(
+            parts: list[str] = []
+            with client.messages.stream(
                 model=model,
                 max_tokens=budget,
                 system=_SYSTEM,
                 temperature=0.3,
                 messages=[{"role": "user", "content": prompt}],
-            )
-            # Reasoning models return `thinking` blocks alongside `text` — keep the text.
-            return "".join(
-                b.text for b in resp.content if getattr(b, "type", "") == "text"
-            ).strip()
+            ) as stream:
+                # `text_stream` only yields deltas from `text` blocks, so
+                # `thinking` blocks (reasoning models) are already excluded.
+                for delta in stream.text_stream:
+                    parts.append(delta)
+                    if on_delta:
+                        on_delta("".join(parts))
+            return "".join(parts).strip()
 
         text = _generate(max_tokens)
         if not text:
@@ -233,9 +243,9 @@ def _ask(prompt: str, model: str | None = None, max_tokens: int = 8000):
 
 
 # ──────────────────────────────── prompts ───────────────────────────────────
-def lcr_summary(lcr, hqla, outflow, inflow, model: str | None = None):
+def lcr_summary(lcr, hqla, outflow, inflow, model: str | None = None, on_delta=None):
     return _ask(
-        f"""Analyse these LCR results per POJK No. 20/2025 for the ALCO.
+        f"""Analyse these LCR results per POJK 42/2015 jo. POJK 19/2024 for the ALCO.
 
 Structure the note under these headers, each written as a narrative paragraph followed by
 supporting bullets:
@@ -255,12 +265,13 @@ Target 450-600 words. {_STYLE_REMINDER}
 HQLA: {', '.join(f'{k}: {v:,.0f}' for k, v in hqla.items())}
 Outflows: Retail={outflow.get('Total Outflow Pendanaan Perorangan', 0):,.0f}, SME={outflow.get('Total Outflow Pendanaan UMK', 0):,.0f}, Corp={outflow.get('Total Outflow Pendanaan Korporasi', 0):,.0f}, Add={outflow.get('Total Outflow Tambahan', 0):,.0f}""",
         model=model,
+        on_delta=on_delta,
     )
 
 
-def nsfr_summary(nsfr, asf, rsf, model: str | None = None):
+def nsfr_summary(nsfr, asf, rsf, model: str | None = None, on_delta=None):
     return _ask(
-        f"""Analyse these NSFR results per POJK No. 20/2025 for the ALCO.
+        f"""Analyse these NSFR results per POJK 50/2017 jo. POJK 20/2024 for the ALCO.
 
 Structure the note under these headers, each written as a narrative paragraph followed by
 supporting bullets:
@@ -280,10 +291,11 @@ Target 450-600 words. {_STYLE_REMINDER}
 ASF: {', '.join(f'{k}: {v:,.0f}' for k, v in asf.items() if 'ASF' in k)}
 RSF: {', '.join(f'{k}: {v:,.0f}' for k, v in rsf.items() if 'RSF' in k)}""",
         model=model,
+        on_delta=on_delta,
     )
 
 
-def ilaap_summary(ilaap_res, model: str | None = None):
+def ilaap_summary(ilaap_res, model: str | None = None, on_delta=None):
     """Narrative on Survival Period Monitoring (ILAAP, SEOJK No. 26/2025)."""
     if not ilaap_res:
         return None, "No ILAAP Survival Period results available. Run it from the Stress Testing page first."
@@ -326,10 +338,11 @@ Target 350-500 words. {_STYLE_REMINDER}
 - Add-on required: {result['add_on_required']}
 {f"- Shortfall at target bucket: IDR {result.get('shortfall_pada_target', 0):,.0f}" if result.get('add_on_required') else ""}""",
         model=model,
+        on_delta=on_delta,
     )
 
 
-def combined_summary(lcr_res, nsfr_res, ilaap_res=None, model: str | None = None):
+def combined_summary(lcr_res, nsfr_res, ilaap_res=None, model: str | None = None, on_delta=None):
     if not lcr_res and not nsfr_res:
         return None, "No analysis results available. Run LCR and/or NSFR first."
     parts = []
@@ -346,8 +359,8 @@ def combined_summary(lcr_res, nsfr_res, ilaap_res=None, model: str | None = None
     if nsfr_res:
         rsf = nsfr_res["rsf"]
         performing = rsf.get("perf_A", 0) + rsf.get("perf_B", 0) + rsf.get("perf_C", 0)
-        npf = rsf.get("npf", 0)
-        npf_ratio = (npf / (performing + npf) * 100) if (performing + npf) else 0.0
+        npl = rsf.get("npl", 0)
+        npl_ratio = (npl / (performing + npl) * 100) if (performing + npl) else 0.0
         ldr_row = nsfr_res["dfs"]["nrc_rangkuman"]
         ldr_match = ldr_row.loc[ldr_row["KETERANGAN"] == "LDR", "REALISASI"]
         ldr_pct = float(ldr_match.iloc[0]) * 100 if len(ldr_match) else None
@@ -355,7 +368,7 @@ def combined_summary(lcr_res, nsfr_res, ilaap_res=None, model: str | None = None
             f"NSFR: {nsfr_res['nsfr'].get('NSFR', 0):.2f}%, "
             f"ASF: {nsfr_res['nsfr']['Total ASF']:,.0f}, "
             f"RSF: {nsfr_res['nsfr']['Total RSF']:,.0f}, "
-            f"NPF ratio: {npf_ratio:.2f}%"
+            f"NPL ratio: {npl_ratio:.2f}%"
             + (f", LDR: {ldr_pct:.1f}%" if ldr_pct is not None else "")
         )
     ilaap_section = ""
@@ -378,7 +391,7 @@ def combined_summary(lcr_res, nsfr_res, ilaap_res=None, model: str | None = None
         )
     return _ask(
         f"""Write an executive summary on the combined liquidity position for the Board of
-Directors, assessed against POJK No. 20/2025 (LCR/NSFR){" and SEOJK No. 26/SEOJK.03/2025 (ILAAP)" if ilaap_res else ""}:
+Directors, assessed against POJK 42/2015 jo. 19/2024 (LCR) · POJK 50/2017 jo. 20/2024 (NSFR){" and SEOJK No. 26/SEOJK.03/2025 (ILAAP)" if ilaap_res else ""}:
 {chr(10).join(parts)}
 
 Open with a short **Executive Overview** — two paragraphs of continuous prose, no bullets — that
@@ -390,7 +403,7 @@ closing with supporting bullets:
    different directions, explain why that divergence arises and which signal should govern.
 2) LCR Compliance and Key Drivers — the 30-day position, its headroom, and what sustains it.
 3) NSFR Structural Funding Adequacy — the one-year position, the durability of the funding base,
-   and what the NPF/LDR figures say about underlying asset quality.
+   and what the NPL/LDR figures say about underlying asset quality.
 {ilaap_section}5) Cross-Ratio Interactions — how actions taken to defend one ratio affect the others. Be
    specific about the trade-off: lengthening liability tenor, shifting into HQLA, or repricing
    deposits all move these metrics, not always in the same direction.
@@ -404,4 +417,5 @@ Close with one sentence noting that the figures derive from the bank's own repor
 and that the calculation trace is available in the system's audit log.""",
         model=model,
         max_tokens=10000,
+        on_delta=on_delta,
     )
